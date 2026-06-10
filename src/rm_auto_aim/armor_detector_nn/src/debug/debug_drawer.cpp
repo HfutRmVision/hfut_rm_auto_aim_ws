@@ -1,8 +1,5 @@
 #include "armor_detector_nn/debug/debug_drawer.hpp"
 
-#include <iomanip>
-#include <sstream>
-
 #include <opencv2/imgproc.hpp>
 
 namespace fyt::auto_aim {
@@ -28,44 +25,19 @@ DebugDrawer::DebugDrawer() {
 void DebugDrawer::drawDetections(
     cv::Mat& image,
     const std::vector<ArmorDetection>& detections,
-    bool show_confidence) const
+    bool /*show_confidence*/) const
 {
   for (const auto& d : detections) {
     cv::Scalar color = generateColor(d.publish_number + "_" +
         (d.color == fyt::EnemyColor::RED ? "R" : "B"));
 
-    // Bbox
-    cv::rectangle(image, d.bbox, color, 2);
-
-    // Keypoints (color-coded by canonical index)
-    cv::Scalar kpt_colors[4] = {
-      cv::Scalar(0, 0, 255),    // kpt0 left_bottom → red
-      cv::Scalar(0, 255, 0),    // kpt1 left_top    → green
-      cv::Scalar(255, 0, 0),    // kpt2 right_top   → blue
-      cv::Scalar(0, 255, 255),  // kpt3 right_bottom → yellow
-    };
-    for (int k = 0; k < 4; ++k) {
-      cv::circle(image, d.keypoints[k], 4, kpt_colors[k], -1);
-      cv::putText(image, std::to_string(k), d.keypoints[k] + cv::Point2f(6, 0),
-                  cv::FONT_HERSHEY_SIMPLEX, 0.4, kpt_colors[k], 1);
+    std::vector<cv::Point> outline;
+    outline.reserve(4);
+    for (const auto& kp : d.keypoints) {
+      outline.emplace_back(cv::Point(cvRound(kp.x), cvRound(kp.y)));
     }
 
-    // Label text
-    std::ostringstream ss;
-    ss << d.publish_number;
-    if (show_confidence) {
-      ss << " " << std::fixed << std::setprecision(2) << d.confidence;
-    }
-    std::string label = ss.str();
-    int baseline = 0;
-    cv::Size text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 2, &baseline);
-    cv::Point label_pos(d.bbox.x, d.bbox.y - 4);
-    cv::rectangle(image,
-      cv::Rect(label_pos.x, label_pos.y - text_size.height,
-               text_size.width, text_size.height + baseline),
-      color, -1);
-    cv::putText(image, label, label_pos,
-                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 2);
+    cv::polylines(image, outline, true, color, 1, cv::LINE_AA);
   }
 }
 

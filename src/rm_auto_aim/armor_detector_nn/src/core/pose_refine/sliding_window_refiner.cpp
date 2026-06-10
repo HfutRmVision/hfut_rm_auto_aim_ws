@@ -443,11 +443,17 @@ PoseEstimate SlidingWindowRefiner::refine(
   frame.R_imu_camera = pnp_result.R_imu_camera;
   frame.yaw_init = initialYawFromRotationLikeArmorDetector(
     pnp_result.rvec, frame.R_imu_camera);
-  frame.pitch = sy_config_.pitch_deg_default * M_PI / 180.0;
-  if (sy_config_.outpost_pitch_sign && pnp_result.publish_number == "outpost") {
-    frame.pitch = -frame.pitch;
+  frame.pitch = pnp_result.pitch;
+  if (!std::isfinite(frame.pitch)) {
+    frame.pitch = sy_config_.pitch_deg_default * M_PI / 180.0;
+    if (sy_config_.outpost_pitch_sign && pnp_result.publish_number == "outpost") {
+      frame.pitch = -frame.pitch;
+    }
   }
-  frame.roll  = sy_config_.roll_deg_default * M_PI / 180.0;
+  frame.roll = pnp_result.roll;
+  if (!std::isfinite(frame.roll)) {
+    frame.roll = sy_config_.roll_deg_default * M_PI / 180.0;
+  }
   // Prefer real observation timestamp; fallback to frame-counter proxy.
   if (pnp_result.observation_stamp.nanoseconds() > 0) {
     frame.stamp = pnp_result.observation_stamp;

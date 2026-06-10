@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# Wrapper to run the python module so relative imports work
-exec python3 -u -m max_entropy_tracker.max_entropy_tracker_node "$@"

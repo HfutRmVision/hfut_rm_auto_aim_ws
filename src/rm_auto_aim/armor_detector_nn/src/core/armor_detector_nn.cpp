@@ -8,6 +8,7 @@
 #include "armor_detector_nn/backend/inference_backend_factory.hpp"
 #include "armor_detector_nn/geometry/nms.hpp"
 #include "armor_detector_nn/postprocess/decode_strategy_factory.hpp"
+#include "armor_detector_nn/postprocess/detection_quality_filter.hpp"
 
 namespace fyt::auto_aim {
 
@@ -57,28 +58,6 @@ bool ArmorDetectorNN::initialize() {
     return false;
   }
 
-  // 5. Optional number classifier
-  if (config_.number_classifier.enabled) {
-    if (config_.number_classifier.model_path.empty() ||
-        config_.number_classifier.label_path.empty()) {
-      FYT_ERROR("armor_detector_nn",
-                "Number classifier enabled but model_path or label_path is empty");
-      // Non-fatal: continue without classifier
-    } else {
-      try {
-        number_classifier_ = std::make_unique<NumberClassifierAdapter>(
-          config_.number_classifier.model_path,
-          config_.number_classifier.label_path,
-          config_.number_classifier.threshold,
-          config_.number_classifier.ignore_classes);
-      } catch (const std::exception& e) {
-        FYT_WARN("armor_detector_nn",
-                 "Failed to load number classifier (%s), continuing without it", e.what());
-        config_.number_classifier.enabled = false;
-      }
-    }
-  }
-
   initialized_ = true;
   FYT_INFO("armor_detector_nn", "Core pipeline initialized with {} backend",
            backend_->info().backend_name.c_str());
@@ -111,8 +90,8 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
       auto pre = preprocessor_->process(images[i]);
 
       auto t_preprocess_end = std::chrono::steady_clock::now();
-      FYT_INFO("armor_detector_nn", "Preprocessing completed in {:.2f} ms",
-               std::chrono::duration<double, std::milli>(t_preprocess_end - t_start).count());
+      FYT_DEBUG("armor_detector_nn", "Preprocessing completed in {:.2f} ms",
+                std::chrono::duration<double, std::milli>(t_preprocess_end - t_start).count());
 
       // Infer
       {
@@ -127,8 +106,8 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
         }
 
         auto infer_end = std::chrono::steady_clock::now();
-        FYT_INFO("armor_detector_nn", "Inference completed in {:.2f} ms",
-                 std::chrono::duration<double, std::milli>(infer_end - t_preprocess_end).count());
+        FYT_DEBUG("armor_detector_nn", "Inference completed in {:.2f} ms",
+                  std::chrono::duration<double, std::milli>(infer_end - t_preprocess_end).count());
 
         // Decode
         std::vector<RawDetection> raw;
@@ -137,9 +116,9 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
           raw = decode_strategy_->decode(outputs, pre.image_meta, config_.postprocess);
         }
         auto t_detect_end = std::chrono::steady_clock::now();
-        FYT_INFO("armor_detector_nn", "Decoding completed in {:.2f} ms, {} raw detections",
-                 std::chrono::duration<double, std::milli>(t_detect_end - infer_end).count(),
-                 raw.size());
+        FYT_DEBUG("armor_detector_nn", "Decoding completed in {:.2f} ms, {} raw detections",
+                  std::chrono::duration<double, std::milli>(t_detect_end - infer_end).count(),
+                  raw.size());
 
         last_profile_.raw_candidates = static_cast<int>(raw.size());
         last_profile_.after_conf = last_profile_.raw_candidates;
@@ -152,12 +131,12 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
                                 config_.postprocess.class_agnostic_nms);
         }
         auto t_nms_end = std::chrono::steady_clock::now();
-        FYT_INFO("armor_detector_nn", "NMS completed in {:.2f} ms, {} detections remaining",
-                 std::chrono::duration<double, std::milli>(t_nms_end - t_detect_end).count(),
-                 nms_result.size());
+        FYT_DEBUG("armor_detector_nn", "NMS completed in {:.2f} ms, {} detections remaining",
+                  std::chrono::duration<double, std::milli>(t_nms_end - t_detect_end).count(),
+                  nms_result.size());
           for (const auto& rd : nms_result) {
-            FYT_INFO("armor_detector_nn", "NMS candidate: class_id={} confidence={}",
-               rd.class_id, rd.confidence);
+            FYT_DEBUG("armor_detector_nn", "NMS candidate: class_id={} confidence={}",
+                      rd.class_id, rd.confidence);
           }
         last_profile_.after_nms = static_cast<int>(nms_result.size());
 
@@ -174,9 +153,13 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
           ad.confidence     = rd.confidence;
           ad.bbox           = rd.bbox;
           ad.keypoints      = rd.keypoints;
-          ad.center         = cv::Point2f(rd.bbox.x + rd.bbox.width / 2,
-                                           rd.bbox.y + rd.bbox.height / 2);
-          fd.detections.push_back(std::move(ad));
+          ad.center =
+            (ad.keypoints[0] + ad.keypoints[1] + ad.keypoints[2] + ad.keypoints[3]) * 0.25F;
+          if (config_.postprocess.keypoint_auto_reorder) {
+            fd.detections.push_back(canonicalizeArmorDetectionGeometry(ad));
+          } else {
+            fd.detections.push_back(std::move(ad));
+          }
         }
 
         // Color filter
@@ -184,18 +167,13 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
           fd.detections = label_map_->filterByColor(fd.detections, target_color_);
         }
 
-        // Optional number classifier override
-        if (number_classifier_) {
-          for (auto& det : fd.detections) {
-            number_classifier_->classifyAndOverride(images[i], det);
-            const auto* corrected = label_map_->lookupByPublishedLabel(
-              det.publish_number, det.color);
-            if (corrected) {
-              det.publish_type = corrected->publish_type;
-              det.model_label = corrected->model_label;
-              det.color = corrected->color;
-            }
-          }
+        if (config_.quality_filter.enabled) {
+          const size_t before_quality_filter = fd.detections.size();
+          fd.detections = filterByGeometryQuality(fd.detections, config_.quality_filter);
+          fd.detections = suppressDuplicateDetections(fd.detections, config_.quality_filter);
+          FYT_DEBUG("armor_detector_nn",
+                    "Quality filter completed: {} -> {} detections",
+                    before_quality_filter, fd.detections.size());
         }
 
         // Clamp to max_detections
@@ -211,9 +189,9 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
         }
 
         auto t_pose_end = std::chrono::steady_clock::now();
-        FYT_INFO("armor_detector_nn", "Pose estimation completed in {:.2f} ms, {} detections published",
-                 std::chrono::duration<double, std::milli>(t_pose_end - t_nms_end).count(),
-                 fd.detections.size());
+        FYT_DEBUG("armor_detector_nn", "Postprocess completed in {:.2f} ms, {} detections published",
+                  std::chrono::duration<double, std::milli>(t_pose_end - t_nms_end).count(),
+                  fd.detections.size());
 
         last_profile_.published = static_cast<int>(fd.detections.size());
       }
@@ -222,8 +200,8 @@ std::vector<FrameDetections> ArmorDetectorNN::detectBatch(
     results.push_back(std::move(fd));
   }
 
-  FYT_INFO("armor_detector_nn", "Batch detection completed: {} frames processed",
-           results.size());
+  FYT_DEBUG("armor_detector_nn", "Batch detection completed: {} frames processed",
+            results.size());
   return results;
 }
 

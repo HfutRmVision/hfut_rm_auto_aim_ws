@@ -1,5 +1,6 @@
 #include "armor_detector_nn/backend/onnxruntime_backend.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
@@ -82,6 +83,13 @@ void OnnxRuntimeBackend::load(const BackendConfig& config) {
     auto type_info = session_->GetInputTypeInfo(0);
     auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
     input_shape_ = tensor_info.GetShape();
+    const auto input_element_type = tensor_info.GetElementType();
+    input_is_fp16_ = input_element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
+    if (
+      input_element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      input_element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+      throw std::runtime_error("OnnxRuntimeBackend: input must be float or float16");
+    }
     FYT_INFO("armor_detector_nn", "  input: {} shape=[{},{},{},{}]",
              input_names_[0].c_str(),
              input_shape_[0], input_shape_[1], input_shape_[2], input_shape_[3]);
@@ -133,13 +141,28 @@ std::vector<TensorOutput> OnnxRuntimeBackend::infer(const TensorInput& input) {
     throw std::runtime_error("OnnxRuntimeBackend: input rank mismatch");
   }
 
-  // Create input tensor (wraps host_data, no copy)
-  auto input_tensor = Ort::Value::CreateTensor<float>(
-    *memory_info_,
-    const_cast<float*>(input.host_data.data()),
-    input.host_data.size(),
-    input_shape_.data(),
-    input_shape_.size());
+  std::vector<Ort::Float16_t> input_fp16_data;
+  Ort::Value input_tensor{nullptr};
+  if (input_is_fp16_) {
+    input_fp16_data.resize(input.host_data.size());
+    std::transform(
+      input.host_data.begin(), input.host_data.end(), input_fp16_data.begin(),
+      [](float value) { return Ort::Float16_t(value); });
+    input_tensor = Ort::Value::CreateTensor<Ort::Float16_t>(
+      *memory_info_,
+      input_fp16_data.data(),
+      input_fp16_data.size(),
+      input_shape_.data(),
+      input_shape_.size());
+  } else {
+    // Wraps host_data, no copy.
+    input_tensor = Ort::Value::CreateTensor<float>(
+      *memory_info_,
+      const_cast<float*>(input.host_data.data()),
+      input.host_data.size(),
+      input_shape_.data(),
+      input_shape_.size());
+  }
 
   try {
     auto outputs = session_->Run(
@@ -154,6 +177,7 @@ std::vector<TensorOutput> OnnxRuntimeBackend::infer(const TensorInput& input) {
       auto& out_val = outputs[i];
       auto type_info = out_val.GetTensorTypeAndShapeInfo();
       auto shape = type_info.GetShape();
+      const auto element_type = type_info.GetElementType();
       size_t num_elements = type_info.GetElementCount();
 
       TensorOutput out;
@@ -162,9 +186,18 @@ std::vector<TensorOutput> OnnxRuntimeBackend::infer(const TensorInput& input) {
       out.info.dtype = TensorInfo::DType::FLOAT32;
       out.host_data.resize(num_elements);
 
-      std::memcpy(out.host_data.data(),
-                  out_val.GetTensorData<float>(),
-                  num_elements * sizeof(float));
+      if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        std::memcpy(out.host_data.data(),
+                    out_val.GetTensorData<float>(),
+                    num_elements * sizeof(float));
+      } else if (element_type == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16) {
+        const auto* fp16_data = out_val.GetTensorData<Ort::Float16_t>();
+        std::transform(
+          fp16_data, fp16_data + num_elements, out.host_data.begin(),
+          [](Ort::Float16_t value) { return static_cast<float>(value); });
+      } else {
+        throw std::runtime_error("OnnxRuntimeBackend: output must be float or float16");
+      }
 
       results.push_back(std::move(out));
     }
@@ -183,9 +216,18 @@ void OnnxRuntimeBackend::warmup(int iterations) {
   for (auto d : input_shape_) num_elements *= d;
   std::vector<float> dummy(num_elements, 0.0F);
 
-  auto input_tensor = Ort::Value::CreateTensor<float>(
-    *memory_info_, dummy.data(), dummy.size(),
-    input_shape_.data(), input_shape_.size());
+  std::vector<Ort::Float16_t> dummy_fp16;
+  Ort::Value input_tensor{nullptr};
+  if (input_is_fp16_) {
+    dummy_fp16.assign(num_elements, Ort::Float16_t(0.0F));
+    input_tensor = Ort::Value::CreateTensor<Ort::Float16_t>(
+      *memory_info_, dummy_fp16.data(), dummy_fp16.size(),
+      input_shape_.data(), input_shape_.size());
+  } else {
+    input_tensor = Ort::Value::CreateTensor<float>(
+      *memory_info_, dummy.data(), dummy.size(),
+      input_shape_.data(), input_shape_.size());
+  }
 
   for (int i = 0; i < iterations; ++i) {
     session_->Run(Ort::RunOptions{nullptr},

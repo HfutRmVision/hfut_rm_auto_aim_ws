@@ -9,11 +9,9 @@ namespace fyt::auto_aim {
 
 enum class BackendType { ONNX_RUNTIME, OPENVINO, TENSORRT };
 enum class Precision { FP32, FP16, INT8 };
-enum class SchedulingMode { SYNC, ASYNC_LATEST, ASYNC_BATCH };
-enum class ColorFilterSource { MODEL, IMAGE, DISABLED };
+enum class ColorFilterSource { MODEL, DISABLED };
 enum class DetectMode { RED, BLUE, DISABLED };
 enum class CopyPolicy { NEVER_COPY, COPY_ON_WRITE_DEBUG, ALWAYS_COPY };
-enum class PlatformProfile { JETSON, NUC_CPUONLY, NUC_WITH_GPU, CUSTOM };
 
 inline std::string backendTypeToString(BackendType type) {
   switch (type) {
@@ -32,23 +30,11 @@ struct BackendConfig {
   std::string engine_path;
   std::string openvino_xml_path;
   std::string openvino_bin_path;
-  std::string calibration_cache;
   std::string input_name{"images"};
   std::vector<std::string> output_names{"output0"};
   int warmup_iterations{10};
   int num_threads{2};
-  bool preallocate_buffers{true};
   bool use_pinned_memory{true};
-  int cuda_stream_count{1};
-  bool gpu_preprocess{false};
-  bool gpu_decode{false};
-
-  // OpenVINO extension options (interface reserved)
-  bool openvino_use_native_preprocess{false};
-  std::string openvino_cache_dir;
-  bool openvino_hybrid_affinity{false};
-  int openvino_num_requests{1};
-  std::string openvino_device_config;
 
   bool allow_fallback{false};
   BackendType fallback_type{BackendType::ONNX_RUNTIME};
@@ -85,12 +71,18 @@ struct PostprocessConfig {
   bool keypoint_auto_reorder{false};
 };
 
-struct NumberClassifierConfig {
+struct QualityFilterConfig {
   bool enabled{false};
-  std::string model_path;
-  std::string label_path;
-  double threshold{0.7};
-  std::vector<std::string> ignore_classes{"negative"};
+  double min_armor_ratio{1.0};
+  double max_armor_ratio{5.0};
+  double max_side_ratio{1.5};
+  double max_rectangular_error_deg{25.0};
+  double min_lightbar_length_px{2.0};
+  double min_area_px{20.0};
+
+  bool deduplicate_enabled{true};
+  double duplicate_iou_threshold{0.60};
+  double duplicate_keypoint_mean_dist_px{8.0};
 };
 
 struct LabelMapConfig {
@@ -127,14 +119,24 @@ struct RefinerConfig {
 };
 
 struct GateConfig {
+  double max_raw_reproj_error{0.0};
   double max_reproj_error{3.0};
   double max_pose_delta_m{0.20};
   double max_yaw_delta_deg{20.0};
   bool require_finite{true};
 };
 
+struct DepthCorrectionConfig {
+  bool enabled{false};
+  double min_depth_delta_m{0.08};
+  double blend_alpha{0.85};
+  double max_correction_m{0.60};
+  double max_scale{1.35};
+  double min_lightbar_length_px{4.0};
+};
+
 struct TrackerConfig {
-  std::string strategy{"internal_iou"};  // internal_iou | muit_sort
+  std::string strategy{"internal_iou"};
   double iou_threshold{0.30};
   int max_missed{15};
   int min_hits{2};
@@ -143,25 +145,62 @@ struct TrackerConfig {
 
 struct CornerRefineConfig {
   bool enabled{false};
+  std::string method{"sp25_lightbar"};
   bool apply_on_confirmed_only{true};
   int max_targets_per_frame{1};
   double time_budget_ms{2.0};
-  double roi_expand_ratio{1.2};
-  int min_bright_points{30};
-  double pca_stability_threshold{0.7};
+  double roi_expand_ratio{1.1};
+  int min_bright_points{50};
+  double pca_stability_threshold{0.85};
   double max_aspect_ratio{5.0};
   double min_aspect_ratio{1.5};
+  double max_corner_shift_px{5.0};
+  double max_mean_corner_shift_px{2.5};
+  double max_refined_center_shift_px{2.0};
+  double min_refine_quality{0.88};
+  bool preserve_perspective{true};
+  double max_edge_angle_delta_deg{12.0};
+  double max_area_ratio_delta{0.12};
+  double max_length_ratio_delta{0.20};
+  double full_roi_expand_ratio{1.45};
+  double binary_threshold{150.0};
+  double min_contour_area_px{6.0};
+  double min_lightbar_length_px{6.0};
+  double min_lightbar_ratio{1.4};
+  double max_lightbar_ratio{20.0};
+  double max_lightbar_angle_error_deg{45.0};
+  double max_rectangular_error_deg{0.0};
+  double max_side_ratio{2.2};
+  double max_lightbar_match_error_px{26.0};
+  double max_pair_center_shift_px{45.0};
 };
 
-struct AsyncConfig {
+struct TraditionalFusionConfig {
   bool enabled{false};
-  double max_wait_ms{2.0};
-  bool drop_if_busy{true};
-  double max_observation_age_ms{100.0};
+  std::string strategy{"fallback"};  // fallback | always
+  int min_nn_detections{1};
+  float confidence_scale{0.92F};
+
+  int binary_thres{160};
+  double light_min_ratio{0.08};
+  double light_max_ratio{0.4};
+  double light_max_angle{40.0};
+  int light_color_diff_thresh{25};
+
+  double armor_min_light_ratio{0.6};
+  double armor_min_small_center_distance{0.8};
+  double armor_max_small_center_distance{3.2};
+  double armor_min_large_center_distance{3.2};
+  double armor_max_large_center_distance{5.0};
+  double armor_max_angle{35.0};
+
+  bool use_classifier{true};
+  double classifier_threshold{0.7};
+  std::vector<std::string> ignore_classes{"negative"};
+  bool use_pca{true};
 };
 
 struct PoseConfig {
-  bool use_ba{true};
   std::string pnp_method{"ippe"};
   double small_armor_width{0.133};
   double small_armor_height{0.050};
@@ -172,22 +211,14 @@ struct PoseConfig {
   SingleYawConfig single_yaw;
   SlidingWindowConfig sliding;
   GateConfig gate;
+  DepthCorrectionConfig depth_correction;
   bool force_pnp_rotate_180{false};
 };
 
 struct RuntimeConfig {
-  PlatformProfile platform_profile{PlatformProfile::CUSTOM};
   ColorFilterSource color_filter_source{ColorFilterSource::MODEL};
   bool publish_empty{true};
-  bool drop_frame_when_busy{true};
   CopyPolicy copy_policy{CopyPolicy::COPY_ON_WRITE_DEBUG};
-  SchedulingMode scheduling_mode{SchedulingMode::SYNC};
-  int frame_queue_size{2};
-  int batch_min_size{1};
-  int batch_max_size{1};
-  double batch_timeout_ms{2.0};
-  double max_observation_age_ms{50.0};
-  bool publish_out_of_order{false};
   bool profile{true};
 };
 
@@ -201,11 +232,11 @@ struct DetectorConfig {
   LabelMapConfig label_map;
   PoseConfig pose;
   RuntimeConfig runtime;
-  NumberClassifierConfig number_classifier;
+  QualityFilterConfig quality_filter;
 
   TrackerConfig tracker;
   CornerRefineConfig corner_refine;
-  AsyncConfig async;
+  TraditionalFusionConfig traditional_fusion;
 };
 
 struct BackendInfo {

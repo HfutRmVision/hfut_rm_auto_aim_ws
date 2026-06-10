@@ -4,12 +4,12 @@
 
 # --------- 通用参数 ---------
 # 机器人配置标签，用于选择 rm_bringup/config/<robot>/ 下的真实参数
-robot: 'video_test'  # 可选: 'video_test', 'wheel_6mm', 'leg_6mm', 'hero', 'sentinel'
+robot: 'leg'  # 可选: 'video_test', 'hero', 'infantry_4_1', 'leg', 'uav', 'sim'
 
 # 命名空间 所有节点、话题都会以这个命名空间开头
 namespace: ''
 
-# image_source: (video | mindvision | hik)
+# image_source: (video | mindvision | hik )
 image_source: 'video'
 
 # true: 虚拟下位机 false: 实车
@@ -36,16 +36,36 @@ use_camera_detector_container: false
 # python: 使用 Python 独立节点
 tracker_impl: 'cpp'
 
+# --------- 仿真启动参数 ---------
+# bringup_sim.launch.py 默认读取 rm_bringup/config/sim 下的子模块参数
+sim:
+  robot: 'sim'
+  detector_type: 'armor_detector_nn'   #armor_detector_nn or armor_detector
+  debug: true
+  # The custom Webots camera controller publishes ROS time from the system clock
+  # and does not publish /clock. Keep simulation bringup on wall time so image
+  # stamps and the virtual_serial TF stamps are in the same time domain.
+  use_sim_time: false
+  use_detector: true
+  start_ballistic_solver: true
+  use_robot_state_publisher: true
+  virtual_serial: false
+  image_topic: '/image_raw'
+  camera_info_topic: '/camera_info'
+  armors_topic: '/armor_detector/armors'
+  joint_states_topic: '/joint_states'
+  cmd_gimbal_topic: '/armor_solver/cmd_gimbal'
+
 # --------- 相机/URDF参数 ---------
 # 舵轮 6mm 相机相对于里程计的位姿 (相机安装位置)
-odom2camera:
-  xyz: "\"0.151 0.00  0.040\""
-  rpy: "\"0.0  0.0  0.000\""
+# odom2camera:
+#   xyz: "\"0.151 0.00  0.040\""
+#   rpy: "\"0.0  0.0  0.000\""
 
 # 腿 6mm 相机相对于里程计的位姿 (相机安装位置)
-# odom2camera:
-#   xyz: "\"0.12514 0.000 0.0505 \""
-#   rpy: "\"0.0  0.0  -0.00\""
+odom2camera:
+  xyz: "\"0.12514 0.000 0.0505 \""
+  rpy: "\"0.0  0.0  -0.00\""
 
 # # 英雄
 # odom2camera:

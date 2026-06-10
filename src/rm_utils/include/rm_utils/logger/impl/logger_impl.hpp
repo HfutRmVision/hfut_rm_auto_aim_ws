@@ -51,9 +51,10 @@ public:
       std::string colored_message =
         fmt::format(LogColorTable[static_cast<std::uint8_t>(level)], message);
       writer_->write(colored_message);
+
+      std::lock_guard<std::mutex> lock(consle_mutex_);
+      fmt::print(fg(LogFmtColorTable[static_cast<std::uint8_t>(level)]), "{}\n", message);
     }
-    std::lock_guard<std::mutex> lock(consle_mutex_);
-    fmt::print(fg(LogFmtColorTable[static_cast<std::uint8_t>(level)]), "{}\n", message);
   }
 
   template <typename... Args>

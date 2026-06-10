@@ -12,12 +12,13 @@
 /hik_camera:
   ros__parameters:
     camera_name: hik_camera
+    camera_info_url: "package://rm_bringup/config/leg/camera_info.yaml"
     camera_sn: ""  # 留空则使用第一个检测到的相机，或者填入序列号指定特定相机
 
     # Image resolution (图像分辨率)
     # Set to 0 to use camera default resolution (设置为0则使用相机默认分辨率)
-    image_width: 0         # Image width, 0 for camera default (图像宽度，0表示使用默认)
-    image_height: 0        # Image height, 0 for camera default (图像高度，0表示使用默认)
+    image_width: 1440      # MV-CS016-10UC full width
+    image_height: 1080     # MV-CS016-10UC full height
     
     # Camera parameters
     # NOTE: frame_rate设置说明：

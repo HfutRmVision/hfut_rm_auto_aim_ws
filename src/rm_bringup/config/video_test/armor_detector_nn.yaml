@@ -2,7 +2,7 @@ armor_detector:
   ros__parameters:
     debug: true
     target_frame: "odom"
-    debug_pose_compare: true
+    debug_pose_compare: false
     publish_in_target_frame: false
 
     backend:
@@ -13,18 +13,12 @@ armor_detector:
       engine_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
       openvino_model_xml: ""
       openvino_model_bin: ""
-      calibration_cache: ""
       input_name: "images"
       output_names: ["output"]
       warmup_iterations: 10
       num_threads: 2
       allow_fallback: true
       fallback_type: "onnxruntime"
-      openvino_use_native_preprocess: false
-      openvino_cache_dir: ""
-      openvino_hybrid_affinity: false
-      openvino_num_requests: 1
-      openvino_device_config: ""
 
     preprocess:
       input_width: 640
@@ -47,38 +41,51 @@ armor_detector:
       class_offset: 4
       keypoint_offset: 18
       box_format: "xyxy_from_kpts"
-      conf_threshold: 0.65
-      nms_threshold: 0.45
+      conf_threshold: 0.7
+      nms_threshold: 0.3
       max_detections: 32
       class_agnostic_nms: false
       keypoint_remap: [0, 1, 2, 3]
       head_already_applied: true
-      keypoint_auto_reorder: false
+      keypoint_auto_reorder: true
 
     label_map:
       path: "package://armor_detector_nn/config/label_map.yaml"
 
-    number_classifier:
-      enabled: false
-      model_path: ""
-      label_path: ""
-      threshold: 0.8
-      ignore_classes: ["negative"]
+    quality_filter:
+      enabled: true
+      min_armor_ratio: 1.0
+      max_armor_ratio: 5.0
+      max_side_ratio: 1.5
+      max_rectangular_error_deg: 25.0
+      min_lightbar_length_px: 4.0
+      min_area_px: 40.0
+      deduplicate_enabled: true
+      duplicate_iou_threshold: 0.60
+      duplicate_keypoint_mean_dist_px: 8.0
 
     pose:
-      use_ba: true
       pnp_method: "ippe"
       small_armor_width: 0.133
       small_armor_height: 0.050
       large_armor_width: 0.225
       large_armor_height: 0.050
+      force_pnp_rotate_180: false
+
+      depth_correction:
+        enabled: false
+        min_depth_delta_m: 0.08
+        blend_alpha: 0.85
+        max_correction_m: 0.60
+        max_scale: 1.35
+        min_lightbar_length_px: 4.0
 
       refiner:
-        mode: "sliding_window"
+        mode: "single_yaw"
 
       single_yaw:
-        max_iterations: 8
-        huber_delta: 3.0
+        max_iterations: 12
+        huber_delta: 4.0
         pitch_deg_default: 15.0
         roll_deg_default: 0.0
         outpost_pitch_sign: true
@@ -100,45 +107,52 @@ armor_detector:
         huber_delta: 3.0
 
       gate:
-        max_reproj_error: 3.0
-        max_pose_delta_m: 0.20
-        max_yaw_delta_deg: 20.0
+        max_raw_reproj_error: 4.0
+        max_reproj_error: 5.0
+        max_pose_delta_m: 0.35
+        max_yaw_delta_deg: 35.0
         require_finite: true
 
     tracker:
       strategy: "internal_iou"
-      iou_threshold: 0.30
+      iou_threshold: 0.20
       max_missed: 15
       min_hits: 2
-      max_center_dist_px: 120
+      max_center_dist_px: 180
 
     corner_refine:
-      enabled: true
+      enabled: false
+      method: "sp25_lightbar"
       apply_on_confirmed_only: true
       max_targets_per_frame: 1
       time_budget_ms: 2.0
-      roi_expand_ratio: 1.2
-      min_bright_points: 30
-      pca_stability_threshold: 0.7
+      roi_expand_ratio: 1.1
+      min_bright_points: 50
+      pca_stability_threshold: 0.85
       max_aspect_ratio: 5.0
       min_aspect_ratio: 1.5
-
-    async:
-      enabled: false
-      max_wait_ms: 2.0
-      drop_if_busy: true
-      max_observation_age_ms: 100.0
+      max_corner_shift_px: 5.0
+      max_mean_corner_shift_px: 2.5
+      max_refined_center_shift_px: 2.0
+      min_refine_quality: 0.88
+      preserve_perspective: true
+      max_edge_angle_delta_deg: 12.0
+      max_area_ratio_delta: 0.12
+      max_length_ratio_delta: 0.20
+      full_roi_expand_ratio: 1.45
+      binary_threshold: 150.0
+      min_contour_area_px: 6.0
+      min_lightbar_length_px: 6.0
+      min_lightbar_ratio: 1.4
+      max_lightbar_ratio: 20.0
+      max_lightbar_angle_error_deg: 45.0
+      max_rectangular_error_deg: 0.0
+      max_side_ratio: 2.2
+      max_lightbar_match_error_px: 26.0
+      max_pair_center_shift_px: 45.0
 
     runtime:
       color_filter_source: "model"
       publish_empty: true
-      drop_frame_when_busy: true
       copy_policy: "copy_on_write_debug"
-      scheduling_mode: "sync"
-      frame_queue_size: 2
-      batch_min_size: 1
-      batch_max_size: 1
-      batch_timeout_ms: 2.0
-      max_observation_age_ms: 50.0
-      publish_out_of_order: false
       profile: true

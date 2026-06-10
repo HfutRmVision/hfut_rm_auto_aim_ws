@@ -70,14 +70,14 @@ public:
       this->create_client<rm_interfaces::srv::SetMode>("gimbal_pipeline/set_mode");
     set_mode_clients_.emplace(autoaim_set_mode_client_2->get_service_name(),
                               autoaim_set_mode_client_2);
-    auto buff_set_mode_client_1 =
-      this->create_client<rm_interfaces::srv::SetMode>("buff_detector/set_mode");
-    set_mode_clients_.emplace(buff_set_mode_client_1->get_service_name(),
-                              buff_set_mode_client_1);
-    auto buff_set_mode_client_2 =
-      this->create_client<rm_interfaces::srv::SetMode>("buff_pose_estimator/set_mode");
-    set_mode_clients_.emplace(buff_set_mode_client_2->get_service_name(),
-                              buff_set_mode_client_2);
+    // auto buff_set_mode_client_1 =
+    //   this->create_client<rm_interfaces::srv::SetMode>("buff_detector/set_mode");
+    // set_mode_clients_.emplace(buff_set_mode_client_1->get_service_name(),
+    //                           buff_set_mode_client_1);
+    // auto buff_set_mode_client_2 =
+    //   this->create_client<rm_interfaces::srv::SetMode>("buff_pose_estimator/set_mode");
+    // set_mode_clients_.emplace(buff_set_mode_client_2->get_service_name(),
+    //                           buff_set_mode_client_2);
     if (has_rune_) {
       auto client1 = this->create_client<rm_interfaces::srv::SetMode>("rune_detector/set_mode");
       set_mode_clients_.emplace(client1->get_service_name(), client1);

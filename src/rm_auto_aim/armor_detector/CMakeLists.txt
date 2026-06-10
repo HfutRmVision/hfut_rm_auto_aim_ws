@@ -86,14 +86,13 @@ ${Sophus_INCLUDE_DIRS}
 ${EIGEN3_INCLUDE_DIRS}
 )
 
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+${G2O_DEFINITIONS}
+)
+
 target_link_libraries(${PROJECT_NAME}
 ${OpenCV_LIBS}
-g2o_core
-g2o_stuff
-g2o_solver_csparse
-g2o_types_sba
-g2o_types_slam3d
-g2o_solver_dense
+${G2O_LIBRARIES}
 fmt::fmt
 tbb
 )

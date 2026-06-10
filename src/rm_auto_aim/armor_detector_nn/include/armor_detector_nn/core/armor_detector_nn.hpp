@@ -13,7 +13,6 @@
 #include "armor_detector_nn/backend/inference_backend.hpp"
 #include "armor_detector_nn/postprocess/decode_strategy.hpp"
 #include "armor_detector_nn/core/label_map.hpp"
-#include "armor_detector_nn/core/number_classifier_adapter.hpp"
 #include "armor_detector_nn/debug/profiler.hpp"
 
 namespace fyt::auto_aim {
@@ -44,7 +43,6 @@ private:
   std::unique_ptr<IInferenceBackend> backend_;
   std::unique_ptr<IDecodeStrategy> decode_strategy_;
   std::unique_ptr<LabelMap> label_map_;
-  std::unique_ptr<NumberClassifierAdapter> number_classifier_;
   fyt::EnemyColor target_color_{fyt::EnemyColor::RED};
   ProfilerEntry last_profile_;
   bool initialized_{false};

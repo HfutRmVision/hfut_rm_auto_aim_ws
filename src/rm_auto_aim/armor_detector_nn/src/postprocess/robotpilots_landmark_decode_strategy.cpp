@@ -6,6 +6,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "armor_detector_nn/postprocess/detection_quality_filter.hpp"
+
 namespace fyt::auto_aim {
 
 namespace {
@@ -17,6 +19,23 @@ constexpr int kColorStart = 9;
 constexpr int kColorCount = 4;
 constexpr int kNumberStart = 13;
 constexpr int kNumberCount = 9;
+
+void applyKeypointRemap(std::array<cv::Point2f, 4>& keypoints,
+                        const PostprocessConfig& config) {
+  if (config.keypoint_remap.size() != keypoints.size()) {
+    return;
+  }
+
+  std::array<cv::Point2f, 4> remapped = keypoints;
+  for (size_t k = 0; k < keypoints.size(); ++k) {
+    const int src = config.keypoint_remap[k];
+    if (src < 0 || src >= static_cast<int>(keypoints.size())) {
+      return;
+    }
+    remapped[k] = keypoints[src];
+  }
+  keypoints = remapped;
+}
 
 }  // namespace
 
@@ -96,7 +115,11 @@ std::vector<RawDetection> RobotPilotsLandmarkDecodeStrategy::decode(
       det.keypoints[k] = cv::Point2f(row[k * 2], row[k * 2 + 1]);
     }
 
+    applyKeypointRemap(det.keypoints, config);
     restoreKeypoints(det.keypoints, image_meta);
+    if (config.keypoint_auto_reorder) {
+      det.keypoints = canonicalArmorKeypoints(det.keypoints);
+    }
     det.bbox = bboxFromKeypoints(det.keypoints);
     detections.push_back(std::move(det));
   }

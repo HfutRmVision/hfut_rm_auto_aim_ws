@@ -8,24 +8,22 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_definitions(-Wall)
 
 # --- backend toggles ---
-option(BUILD_ONNX_BACKEND     "Build ONNX Runtime backend"   OFF)
-option(BUILD_OPENVINO_BACKEND "Build OpenVINO backend"       ON )
-option(BUILD_TENSORRT_BACKEND "Build TensorRT backend"       OFF)
-option(BUILD_WITH_GPU         "Build all GPU/backends (TensorRT, ONNX, OpenVINO GPU parts)" OFF)
+# Desktop NVIDIA profile: AMD CPU + NVIDIA GPU should use ONNX Runtime CUDA by default.
+# OpenVINO is Intel-oriented and TensorRT requires a matching TensorRT SDK/engine, so both
+# stay opt-in. BUILD_WITH_GPU is kept as a compatibility switch for old build commands.
+option(BUILD_WITH_GPU         "Compatibility option: enable the NVIDIA GPU-capable ONNX Runtime backend" ON)
+option(BUILD_ONNX_BACKEND     "Build ONNX Runtime backend; use onnxruntime-gpu at runtime for CUDA" ON)
+option(BUILD_OPENVINO_BACKEND "Build OpenVINO backend" OFF)
+option(BUILD_TENSORRT_BACKEND "Build TensorRT backend; requires CUDA Toolkit and TensorRT SDK" OFF)
 
 if(BUILD_WITH_GPU)
-  message(STATUS "armor_detector_nn: BUILD_WITH_GPU=ON -> GPU-enabled build path")
-else()
-  message(STATUS "armor_detector_nn: BUILD_WITH_GPU=OFF -> CPU-only build path")
-  if(BUILD_ONNX_BACKEND)
-    message(WARNING "BUILD_ONNX_BACKEND is ignored when BUILD_WITH_GPU=OFF; forcing OFF")
-    set(BUILD_ONNX_BACKEND OFF CACHE BOOL "Build ONNX Runtime backend" FORCE)
-  endif()
-  if(BUILD_TENSORRT_BACKEND)
-    message(WARNING "BUILD_TENSORRT_BACKEND is ignored when BUILD_WITH_GPU=OFF; forcing OFF")
-    set(BUILD_TENSORRT_BACKEND OFF CACHE BOOL "Build TensorRT backend" FORCE)
-  endif()
+  set(BUILD_ONNX_BACKEND ON CACHE BOOL "Build ONNX Runtime backend" FORCE)
 endif()
+
+message(STATUS "armor_detector_nn backends:")
+message(STATUS "  ONNX Runtime: ${BUILD_ONNX_BACKEND}")
+message(STATUS "  OpenVINO:      ${BUILD_OPENVINO_BACKEND}")
+message(STATUS "  TensorRT:      ${BUILD_TENSORRT_BACKEND}")
 
 #######################
 ## Find dependencies ##
@@ -34,6 +32,7 @@ endif()
 find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV 4.5 REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Sophus REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 ament_auto_find_build_dependencies()
@@ -46,10 +45,8 @@ ament_auto_find_build_dependencies()
 set(CORE_SOURCES
   src/core/label_map.cpp
   src/core/preprocessor.cpp
-  src/core/frame_scheduler.cpp
   src/core/armor_pose_estimator_adapter.cpp
   src/core/armor_detector_nn.cpp
-  src/core/number_classifier_adapter.cpp
   src/core/pose_refine/single_yaw_refiner.cpp
   src/core/pose_refine/sliding_window_refiner.cpp
   src/core/tracker/internal_iou_tracker_strategy.cpp
@@ -61,20 +58,48 @@ set(BACKEND_SOURCES
   src/backend/inference_backend_factory.cpp
 )
 
-# --- ONNX 后端（仅 GPU 路径启用） ---
-if(BUILD_WITH_GPU AND BUILD_ONNX_BACKEND)
+# --- ONNX Runtime backend ---
+# Use the same backend for CPU and NVIDIA GPU. CUDA support is provided by the
+# installed ONNX Runtime binary (onnxruntime-gpu), not by this CMake target.
+if(BUILD_ONNX_BACKEND)
   set(ONNXRUNTIME_ROOT "" CACHE PATH "Path to ONNX Runtime root directory")
   if(NOT ONNXRUNTIME_ROOT)
     set(ONNXRUNTIME_ROOT $ENV{ONNXRUNTIME_ROOT})
   endif()
-  if(NOT ONNXRUNTIME_ROOT)
-    message(FATAL_ERROR "BUILD_ONNX_BACKEND=ON, but ONNXRUNTIME_ROOT is not set")
+  if(NOT ONNXRUNTIME_ROOT AND EXISTS /opt/onnxruntime-gpu)
+    set(ONNXRUNTIME_ROOT /opt/onnxruntime-gpu)
   endif()
-  set(ONNXRUNTIME_INCLUDE_DIR ${ONNXRUNTIME_ROOT}/include)
-  set(ONNXRUNTIME_LIB ${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so)
-  if(NOT EXISTS ${ONNXRUNTIME_LIB})
-    message(FATAL_ERROR "Cannot find libonnxruntime.so at ${ONNXRUNTIME_LIB}")
+
+  find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+    HINTS
+      ${ONNXRUNTIME_ROOT}/include
+      /opt/onnxruntime-gpu/include
+      /usr/local/include
+      /usr/include
+    PATH_SUFFIXES
+      onnxruntime
+      onnxruntime/core/session
+  )
+  find_library(ONNXRUNTIME_LIB onnxruntime
+    HINTS
+      ${ONNXRUNTIME_ROOT}/lib
+      ${ONNXRUNTIME_ROOT}/lib64
+      /opt/onnxruntime-gpu/lib
+      /usr/local/lib
+      /usr/local/lib64
+      /usr/lib
+      /usr/lib/x86_64-linux-gnu
+  )
+
+  if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIB)
+    message(FATAL_ERROR
+      "BUILD_ONNX_BACKEND=ON but ONNX Runtime was not found. "
+      "Install onnxruntime-gpu for NVIDIA CUDA, then set ONNXRUNTIME_ROOT "
+      "to its install prefix if CMake cannot find it.")
   endif()
+
+  message(STATUS "ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
+  message(STATUS "ONNX Runtime lib:     ${ONNXRUNTIME_LIB}")
   list(APPEND BACKEND_SOURCES src/backend/onnxruntime_backend.cpp)
 endif()
 
@@ -84,17 +109,27 @@ if(BUILD_OPENVINO_BACKEND)
   list(APPEND BACKEND_SOURCES src/backend/openvino_backend.cpp)
 endif()
 
-# --- TensorRT 后端（仅 GPU 路径启用） ---
-if(BUILD_WITH_GPU AND BUILD_TENSORRT_BACKEND)
+# --- TensorRT backend ---
+if(BUILD_TENSORRT_BACKEND)
   find_package(CUDAToolkit QUIET)
   if(NOT CUDAToolkit_FOUND)
     message(FATAL_ERROR "BUILD_TENSORRT_BACKEND=ON but CUDA not found. Set CUDAToolkit_ROOT or install CUDA.")
   endif()
 
   find_path(TENSORRT_INCLUDE_DIR NvInfer.h
-    HINTS /usr/include /usr/local/include /usr/include/aarch64-linux-gnu)
+    HINTS
+      /usr/include
+      /usr/local/include
+      /usr/include/x86_64-linux-gnu
+      /usr/include/aarch64-linux-gnu
+  )
   find_library(TENSORRT_NVINFER_LIB nvinfer
-    HINTS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+    HINTS
+      /usr/lib
+      /usr/local/lib
+      /usr/lib/x86_64-linux-gnu
+      /usr/lib/aarch64-linux-gnu
+  )
 
   if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_NVINFER_LIB)
     message(FATAL_ERROR
@@ -108,6 +143,7 @@ endif()
 # --- postprocess sources ---
 set(POSTPROCESS_SOURCES
   src/postprocess/decode_strategy_factory.cpp
+  src/postprocess/detection_quality_filter.cpp
   src/postprocess/ultralytics_pose_decode_strategy.cpp
   src/postprocess/robotpilots_landmark_decode_strategy.cpp
 )
@@ -138,11 +174,17 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
+  ${Sophus_INCLUDE_DIRS}
 )
 
-target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS} yaml-cpp)
+target_link_libraries(${PROJECT_NAME}
+  ${OpenCV_LIBS}
+  yaml-cpp
+  ${armor_detector_LIBRARIES}
+  Sophus::Sophus
+)
 
-if(BUILD_WITH_GPU AND BUILD_ONNX_BACKEND)
+if(BUILD_ONNX_BACKEND)
   target_include_directories(${PROJECT_NAME} PUBLIC ${ONNXRUNTIME_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} ${ONNXRUNTIME_LIB})
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARMOR_DETECTOR_NN_HAS_ONNX=1)
@@ -153,7 +195,7 @@ if(BUILD_OPENVINO_BACKEND)
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARMOR_DETECTOR_NN_HAS_OPENVINO=1)
 endif()
 
-if(BUILD_WITH_GPU AND BUILD_TENSORRT_BACKEND AND CUDAToolkit_FOUND)
+if(BUILD_TENSORRT_BACKEND AND CUDAToolkit_FOUND)
   target_include_directories(${PROJECT_NAME} PUBLIC ${TENSORRT_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} ${TENSORRT_NVINFER_LIB} CUDA::cudart)
   target_compile_definitions(${PROJECT_NAME} PUBLIC ARMOR_DETECTOR_NN_HAS_TENSORRT=1)
@@ -173,6 +215,7 @@ install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 ament_auto_package(
+  USE_SCOPED_HEADER_INSTALL_DIR
   INSTALL_TO_SHARE
   docs
   model

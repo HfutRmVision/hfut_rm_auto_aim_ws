@@ -1,9 +1,10 @@
 #ifndef ARMOR_DETECTOR_NN_ARMOR_DETECTOR_NN_NODE_HPP_
 #define ARMOR_DETECTOR_NN_ARMOR_DETECTOR_NN_NODE_HPP_
 
-#include <deque>
 #include <memory>
 #include <string>
+
+#include "armor_detector/armor_detector.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -23,7 +24,6 @@
 #include "armor_detector_nn/core/corner_refine/icorner_refiner.hpp"
 #include "armor_detector_nn/core/detection_types.hpp"
 #include "armor_detector_nn/core/detector_config.hpp"
-#include "armor_detector_nn/core/frame_scheduler.hpp"
 #include "armor_detector_nn/core/tracker/itracker_strategy.hpp"
 #include "armor_detector_nn/debug/debug_drawer.hpp"
 #include "armor_detector_nn/debug/profiler.hpp"
@@ -56,6 +56,12 @@ private:
     const std::vector<PoseEstimate>& poses);
   void createDebugPublishers();
   void destroyDebugPublishers();
+  void initializeTraditionalDetector();
+  void updateTraditionalDetectorColor();
+  std::vector<ArmorDetection> detectTraditional(const cv::Mat& bgr_frame);
+  std::vector<ArmorDetection> mergeDetections(
+    const std::vector<ArmorDetection>& nn_detections,
+    const std::vector<ArmorDetection>& traditional_detections) const;
 
   rcl_interfaces::msg::SetParametersResult
   onSetParameters(const std::vector<rclcpp::Parameter>& params);
@@ -89,7 +95,6 @@ private:
 
   // Pipeline
   std::unique_ptr<ArmorDetectorNN> detector_;
-  std::unique_ptr<FrameScheduler> frame_scheduler_;
   std::unique_ptr<ArmorPoseEstimatorAdapter> pose_estimator_adapter_;
   std::unique_ptr<ArmorPoseEstimatorAdapter> pose_estimator_reference_adapter_;
   std::unique_ptr<DebugDrawer> debug_drawer_;
@@ -104,8 +109,8 @@ private:
   // Phase 3 — corner refiner
   std::shared_ptr<ICornerRefiner> corner_refiner_;
 
-  // Recent detections (for future async phases)
-  std::deque<FrameDetections> recent_detections_;
+  // Traditional fallback/fusion detector reused from armor_detector package.
+  std::unique_ptr<Detector> traditional_detector_;
 
   // TF: target_frame (e.g. odom) -> camera frame rotation
   std::shared_ptr<tf2_ros::Buffer> tf2_buffer_;

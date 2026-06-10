@@ -10,7 +10,6 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 
-#include "armor_detector_nn/core/ba_adjuster.hpp"
 #include "armor_detector_nn/core/pose_refine/pose_refiner.hpp"
 
 namespace fyt::auto_aim {
@@ -53,6 +52,114 @@ double reprojectionErrorSum(
     err += cv::norm(image_points[j] - projected[j]);
   }
   return err;
+}
+
+double objectHeightMeters(const std::vector<cv::Point3f>& object_points) {
+  if (object_points.size() < 2) {
+    return 0.0;
+  }
+  const double dx = static_cast<double>(object_points[1].x - object_points[0].x);
+  const double dy = static_cast<double>(object_points[1].y - object_points[0].y);
+  const double dz = static_cast<double>(object_points[1].z - object_points[0].z);
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+double lightbarHeightDepth(
+    const std::vector<cv::Point2f>& image_points,
+    const std::vector<cv::Point3f>& object_points,
+    const cv::Mat& K,
+    const cv::Mat& D,
+    const DepthCorrectionConfig& config) {
+  if (image_points.size() < 4 || object_points.size() < 2) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const double left_px = cv::norm(image_points[1] - image_points[0]);
+  const double right_px = cv::norm(image_points[2] - image_points[3]);
+  if (!std::isfinite(left_px) || !std::isfinite(right_px) ||
+      left_px < config.min_lightbar_length_px ||
+      right_px < config.min_lightbar_length_px) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const double height_m = objectHeightMeters(object_points);
+  if (height_m <= 0.0 || !std::isfinite(height_m)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  std::vector<cv::Point2f> normalized_points;
+  cv::undistortPoints(image_points, normalized_points, K, D);
+  if (normalized_points.size() < 4) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const double left_norm = cv::norm(normalized_points[1] - normalized_points[0]);
+  const double right_norm = cv::norm(normalized_points[2] - normalized_points[3]);
+  const double mean_norm = 0.5 * (left_norm + right_norm);
+  if (mean_norm <= 1e-9 || !std::isfinite(mean_norm)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return height_m / mean_norm;
+}
+
+bool applyDepthCorrection(
+    PoseEstimate& result,
+    const std::vector<cv::Point2f>& image_points,
+    const std::vector<cv::Point3f>& object_points,
+    const cv::Mat& K,
+    const cv::Mat& D,
+    const PoseConfig& pose_config) {
+  const auto& config = pose_config.depth_correction;
+  if (!config.enabled || !result.valid || result.tvec.empty() ||
+      config.blend_alpha <= 0.0 || config.max_scale <= 1.0 ||
+      config.max_correction_m <= 0.0) {
+    return false;
+  }
+
+  const double pnp_z = result.tvec.at<double>(2);
+  if (pnp_z <= 0.0 || !std::isfinite(pnp_z)) {
+    return false;
+  }
+
+  const double height_z = lightbarHeightDepth(
+    image_points, object_points, K, D, config);
+  if (!std::isfinite(height_z) ||
+      height_z <= pnp_z + config.min_depth_delta_m) {
+    return false;
+  }
+
+  const double capped_z = std::min({
+    height_z,
+    pnp_z * config.max_scale,
+    pnp_z + config.max_correction_m
+  });
+  const double corrected_z = pnp_z + config.blend_alpha * (capped_z - pnp_z);
+  if (corrected_z <= pnp_z || !std::isfinite(corrected_z)) {
+    return false;
+  }
+
+  const double scale = corrected_z / pnp_z;
+  result.tvec.at<double>(0) *= scale;
+  result.tvec.at<double>(1) *= scale;
+  result.tvec.at<double>(2) *= scale;
+  result.translation = Eigen::Vector3d(
+    result.tvec.at<double>(0),
+    result.tvec.at<double>(1),
+    result.tvec.at<double>(2));
+
+  const double corrected_error = reprojectionErrorSum(
+    object_points, image_points, result.rvec, result.tvec, K, D);
+  if (std::isfinite(corrected_error) && !image_points.empty()) {
+    result.reprojection_error = corrected_error;
+    result.reproj_error_refined =
+      corrected_error / static_cast<double>(image_points.size());
+  }
+  result.quality_score *= 0.95;
+
+  FYT_DEBUG("armor_detector_nn",
+            "DepthCorrection: z %.3f -> %.3f, height_z %.3f, scale %.3f",
+            pnp_z, corrected_z, height_z, scale);
+  return true;
 }
 
 int selectIppeSolutionLikeArmorDetector(
@@ -135,11 +242,6 @@ ArmorPoseEstimatorAdapter::ArmorPoseEstimatorAdapter(const PoseConfig& config)
 
 ArmorPoseEstimatorAdapter::~ArmorPoseEstimatorAdapter() = default;
 
-void ArmorPoseEstimatorAdapter::setBundleAdjuster(
-    std::unique_ptr<IBundleAdjuster> adjuster) {
-  ba_adjuster_ = std::move(adjuster);
-}
-
 void ArmorPoseEstimatorAdapter::setRefiner(
     std::shared_ptr<IPoseRefiner> refiner) {
   refiner_ = std::move(refiner);
@@ -179,6 +281,23 @@ PoseEstimate ArmorPoseEstimatorAdapter::estimate(
     return result;
   }
 
+  if (config_.gate.require_finite && !std::isfinite(result.reproj_error_raw)) {
+    FYT_DEBUG("armor_detector_nn",
+              "Reject PnP result for %s: non-finite raw reprojection error",
+              detection.publish_number.c_str());
+    return PoseEstimate{};
+  }
+
+  if (config_.gate.max_raw_reproj_error > 0.0 &&
+      result.reproj_error_raw > config_.gate.max_raw_reproj_error) {
+    FYT_DEBUG("armor_detector_nn",
+              "Reject PnP result for %s: raw reproj error %.3f > %.3f",
+              detection.publish_number.c_str(),
+              result.reproj_error_raw,
+              config_.gate.max_raw_reproj_error);
+    return PoseEstimate{};
+  }
+
   // Propagate tracker/time context before refinement so phase-4 sliding BA
   // can build per-track windows with real timestamps.
   result.track_id = detection.track_id;
@@ -198,6 +317,7 @@ PoseEstimate ArmorPoseEstimatorAdapter::estimate(
       refined.observation_stamp = detection.stamp;
       refined.publish_number = detection.publish_number;
       refined.R_imu_camera = R_imu_camera;
+      applyDepthCorrection(refined, image_pts, object_pts, K, D, config_);
       return refined;
     }
   }
@@ -209,6 +329,7 @@ PoseEstimate ArmorPoseEstimatorAdapter::estimate(
   result.observation_stamp = detection.stamp;
   result.publish_number = detection.publish_number;
   result.R_imu_camera = R_imu_camera;
+  applyDepthCorrection(result, image_pts, object_pts, K, D, config_);
   return result;
 }
 
@@ -364,11 +485,6 @@ PoseEstimate ArmorPoseEstimatorAdapter::solvePnP(
     result.reproj_error_refined = result.reproj_error_raw;
     result.mode = EstimateMode::PNP_VALID;
 
-    // Legacy BA refinement path
-    if (config_.use_ba && ba_adjuster_) {
-      result = ba_adjuster_->refine(result, image_points, object_points,
-                                     camera_matrix, dist_coeffs);
-    }
   }
 
   return result;

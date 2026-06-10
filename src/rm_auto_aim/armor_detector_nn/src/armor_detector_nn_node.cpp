@@ -1,7 +1,9 @@
 #include "armor_detector_nn/armor_detector_nn_node.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -16,12 +18,65 @@
 
 #include "rm_utils/assert.hpp"
 #include "rm_utils/logger/log.hpp"
+#include "rm_utils/url_resolver.hpp"
 
+#include "armor_detector/light_corner_corrector.hpp"
+#include "armor_detector/number_classifier.hpp"
 #include "armor_detector_nn/core/pose_refine/pose_refiner.hpp"
 #include "armor_detector_nn/core/tracker/internal_iou_tracker_strategy.hpp"
 #include "armor_detector_nn/core/corner_refine/roi_pca_corner_refiner.hpp"
+#include "armor_detector_nn/postprocess/detection_quality_filter.hpp"
 
 namespace fyt::auto_aim {
+
+namespace {
+
+float rectIoU(const cv::Rect2f& a, const cv::Rect2f& b) {
+  const float x1 = std::max(a.x, b.x);
+  const float y1 = std::max(a.y, b.y);
+  const float x2 = std::min(a.x + a.width, b.x + b.width);
+  const float y2 = std::min(a.y + a.height, b.y + b.height);
+  const float w = std::max(0.0F, x2 - x1);
+  const float h = std::max(0.0F, y2 - y1);
+  const float inter = w * h;
+  const float area_a = std::max(0.0F, a.width) * std::max(0.0F, a.height);
+  const float area_b = std::max(0.0F, b.width) * std::max(0.0F, b.height);
+  return inter / (area_a + area_b - inter + 1e-6F);
+}
+
+float meanKeypointDistance(
+    const std::array<cv::Point2f, 4>& a,
+    const std::array<cv::Point2f, 4>& b) {
+  float sum = 0.0F;
+  for (size_t i = 0; i < a.size(); ++i) {
+    sum += static_cast<float>(cv::norm(a[i] - b[i]));
+  }
+  return sum / static_cast<float>(a.size());
+}
+
+cv::Rect2f bboxFromKeypoints(const std::array<cv::Point2f, 4>& keypoints) {
+  float min_x = keypoints[0].x;
+  float max_x = keypoints[0].x;
+  float min_y = keypoints[0].y;
+  float max_y = keypoints[0].y;
+  for (int i = 1; i < 4; ++i) {
+    min_x = std::min(min_x, keypoints[i].x);
+    max_x = std::max(max_x, keypoints[i].x);
+    min_y = std::min(min_y, keypoints[i].y);
+    max_y = std::max(max_y, keypoints[i].y);
+  }
+  return {min_x, min_y, std::max(0.0F, max_x - min_x), std::max(0.0F, max_y - min_y)};
+}
+
+std::string traditionalModelLabel(const ArmorDetection& detection) {
+  const char color = detection.color == fyt::EnemyColor::RED ? 'R' : 'B';
+  if (detection.publish_number == "outpost") return std::string("T") + color + "O";
+  if (detection.publish_number == "sentry") return std::string("T") + color + "S";
+  if (detection.publish_number == "base") return std::string("T") + color + "B";
+  return std::string("T") + color + detection.publish_number;
+}
+
+}  // namespace
 
 ArmorDetectorNNNode::ArmorDetectorNNNode(const rclcpp::NodeOptions& options)
   : rclcpp::Node("armor_detector", options)
@@ -40,6 +95,10 @@ ArmorDetectorNNNode::ArmorDetectorNNNode(const rclcpp::NodeOptions& options)
               "Node will start but detection is disabled.");
   }
 
+  if (config_.traditional_fusion.enabled) {
+    initializeTraditionalDetector();
+  }
+
   // --- pose estimator ---
   pose_estimator_adapter_ = std::make_unique<ArmorPoseEstimatorAdapter>(config_.pose);
   // Reference estimator: aligned with armor_detector-like baseline
@@ -47,6 +106,7 @@ ArmorDetectorNNNode::ArmorDetectorNNNode(const rclcpp::NodeOptions& options)
   {
     auto ref_pose_cfg = config_.pose;
     ref_pose_cfg.refiner.mode = "none";
+    ref_pose_cfg.depth_correction.enabled = false;
     pose_estimator_reference_adapter_ =
       std::make_unique<ArmorPoseEstimatorAdapter>(ref_pose_cfg);
   }
@@ -145,28 +205,13 @@ void ArmorDetectorNNNode::initializeParameters() {
     config_.backend.engine_path     = this->declare_parameter("backend.engine_path", "");
     config_.backend.openvino_xml_path = this->declare_parameter("backend.openvino_model_xml", "");
     config_.backend.openvino_bin_path = this->declare_parameter("backend.openvino_model_bin", "");
-    config_.backend.calibration_cache = this->declare_parameter("backend.calibration_cache", "");
     config_.backend.input_name    = this->declare_parameter("backend.input_name", "images");
     config_.backend.output_names  = this->declare_parameter("backend.output_names",
                                         std::vector<std::string>{"output0"});
     config_.backend.warmup_iterations = this->declare_parameter("backend.warmup_iterations", 10);
     config_.backend.num_threads    = this->declare_parameter("backend.num_threads", 2);
-    config_.backend.preallocate_buffers = this->declare_parameter("backend.preallocate_buffers", true);
     config_.backend.use_pinned_memory = this->declare_parameter("backend.use_pinned_memory", true);
-    config_.backend.cuda_stream_count = this->declare_parameter("backend.cuda_stream_count", 1);
-    config_.backend.gpu_preprocess = this->declare_parameter("backend.gpu_preprocess", false);
-    config_.backend.gpu_decode = this->declare_parameter("backend.gpu_decode", false);
     config_.backend.allow_fallback = this->declare_parameter("backend.allow_fallback", false);
-    config_.backend.openvino_use_native_preprocess =
-      this->declare_parameter("backend.openvino_use_native_preprocess", false);
-    config_.backend.openvino_cache_dir =
-      this->declare_parameter("backend.openvino_cache_dir", "");
-    config_.backend.openvino_hybrid_affinity =
-      this->declare_parameter("backend.openvino_hybrid_affinity", false);
-    config_.backend.openvino_num_requests =
-      this->declare_parameter("backend.openvino_num_requests", 1);
-    config_.backend.openvino_device_config =
-      this->declare_parameter("backend.openvino_device_config", "");
     std::string fallback_str       = this->declare_parameter("backend.fallback_type", "onnxruntime");
 
     if (type_str == "openvino") config_.backend.type = BackendType::OPENVINO;
@@ -229,24 +274,32 @@ void ArmorDetectorNNNode::initializeParameters() {
     config_.label_map.path = this->declare_parameter("label_map.path", "");
   }
 
-  // number_classifier (optional ID postprocessor)
+  // quality_filter: geometry gate and same-target duplicate suppression
   {
-    config_.number_classifier.enabled =
-      this->declare_parameter("number_classifier.enabled", false);
-    config_.number_classifier.model_path =
-      this->declare_parameter("number_classifier.model_path", "");
-    config_.number_classifier.label_path =
-      this->declare_parameter("number_classifier.label_path", "");
-    config_.number_classifier.threshold =
-      this->declare_parameter("number_classifier.threshold", 0.7);
-    config_.number_classifier.ignore_classes =
-      this->declare_parameter("number_classifier.ignore_classes",
-                              std::vector<std::string>{"negative"});
+    config_.quality_filter.enabled =
+      this->declare_parameter("quality_filter.enabled", false);
+    config_.quality_filter.min_armor_ratio =
+      this->declare_parameter("quality_filter.min_armor_ratio", 1.0);
+    config_.quality_filter.max_armor_ratio =
+      this->declare_parameter("quality_filter.max_armor_ratio", 5.0);
+    config_.quality_filter.max_side_ratio =
+      this->declare_parameter("quality_filter.max_side_ratio", 1.5);
+    config_.quality_filter.max_rectangular_error_deg =
+      this->declare_parameter("quality_filter.max_rectangular_error_deg", 25.0);
+    config_.quality_filter.min_lightbar_length_px =
+      this->declare_parameter("quality_filter.min_lightbar_length_px", 2.0);
+    config_.quality_filter.min_area_px =
+      this->declare_parameter("quality_filter.min_area_px", 20.0);
+    config_.quality_filter.deduplicate_enabled =
+      this->declare_parameter("quality_filter.deduplicate_enabled", true);
+    config_.quality_filter.duplicate_iou_threshold =
+      this->declare_parameter("quality_filter.duplicate_iou_threshold", 0.60);
+    config_.quality_filter.duplicate_keypoint_mean_dist_px =
+      this->declare_parameter("quality_filter.duplicate_keypoint_mean_dist_px", 8.0);
   }
 
   // pose
   {
-    config_.pose.use_ba = this->declare_parameter("pose.use_ba", true);
     config_.pose.pnp_method = this->declare_parameter("pose.pnp_method", "ippe");
     config_.pose.small_armor_width  = this->declare_parameter("pose.small_armor_width", 0.133);
     config_.pose.small_armor_height = this->declare_parameter("pose.small_armor_height", 0.050);
@@ -280,10 +333,24 @@ void ArmorDetectorNNNode::initializeParameters() {
     config_.pose.sliding.sigma_kp_scale = this->declare_parameter("pose.sliding.sigma_kp_scale", 5.0);
     config_.pose.sliding.huber_delta = this->declare_parameter("pose.sliding.huber_delta", 3.0);
 
+    config_.pose.gate.max_raw_reproj_error = this->declare_parameter("pose.gate.max_raw_reproj_error", 0.0);
     config_.pose.gate.max_reproj_error = this->declare_parameter("pose.gate.max_reproj_error", 3.0);
     config_.pose.gate.max_pose_delta_m = this->declare_parameter("pose.gate.max_pose_delta_m", 0.20);
     config_.pose.gate.max_yaw_delta_deg = this->declare_parameter("pose.gate.max_yaw_delta_deg", 20.0);
     config_.pose.gate.require_finite = this->declare_parameter("pose.gate.require_finite", true);
+
+    config_.pose.depth_correction.enabled =
+      this->declare_parameter("pose.depth_correction.enabled", false);
+    config_.pose.depth_correction.min_depth_delta_m =
+      this->declare_parameter("pose.depth_correction.min_depth_delta_m", 0.08);
+    config_.pose.depth_correction.blend_alpha =
+      this->declare_parameter("pose.depth_correction.blend_alpha", 0.85);
+    config_.pose.depth_correction.max_correction_m =
+      this->declare_parameter("pose.depth_correction.max_correction_m", 0.60);
+    config_.pose.depth_correction.max_scale =
+      this->declare_parameter("pose.depth_correction.max_scale", 1.35);
+    config_.pose.depth_correction.min_lightbar_length_px =
+      this->declare_parameter("pose.depth_correction.min_lightbar_length_px", 4.0);
   }
 
   // tracker (Phase 2)
@@ -298,51 +365,91 @@ void ArmorDetectorNNNode::initializeParameters() {
   // corner_refine (Phase 3)
   {
     config_.corner_refine.enabled = this->declare_parameter("corner_refine.enabled", false);
+    config_.corner_refine.method = this->declare_parameter("corner_refine.method", "sp25_lightbar");
     config_.corner_refine.apply_on_confirmed_only = this->declare_parameter("corner_refine.apply_on_confirmed_only", true);
     config_.corner_refine.max_targets_per_frame = this->declare_parameter("corner_refine.max_targets_per_frame", 1);
     config_.corner_refine.time_budget_ms = this->declare_parameter("corner_refine.time_budget_ms", 2.0);
-    config_.corner_refine.roi_expand_ratio = this->declare_parameter("corner_refine.roi_expand_ratio", 1.2);
-    config_.corner_refine.min_bright_points = this->declare_parameter("corner_refine.min_bright_points", 30);
-    config_.corner_refine.pca_stability_threshold = this->declare_parameter("corner_refine.pca_stability_threshold", 0.7);
+    config_.corner_refine.roi_expand_ratio = this->declare_parameter("corner_refine.roi_expand_ratio", 1.1);
+    config_.corner_refine.min_bright_points = this->declare_parameter("corner_refine.min_bright_points", 50);
+    config_.corner_refine.pca_stability_threshold = this->declare_parameter("corner_refine.pca_stability_threshold", 0.85);
     config_.corner_refine.max_aspect_ratio = this->declare_parameter("corner_refine.max_aspect_ratio", 5.0);
     config_.corner_refine.min_aspect_ratio = this->declare_parameter("corner_refine.min_aspect_ratio", 1.5);
+    config_.corner_refine.max_corner_shift_px = this->declare_parameter("corner_refine.max_corner_shift_px", 5.0);
+    config_.corner_refine.max_mean_corner_shift_px = this->declare_parameter("corner_refine.max_mean_corner_shift_px", 2.5);
+    config_.corner_refine.max_refined_center_shift_px = this->declare_parameter("corner_refine.max_refined_center_shift_px", 2.0);
+    config_.corner_refine.min_refine_quality = this->declare_parameter("corner_refine.min_refine_quality", 0.88);
+    config_.corner_refine.preserve_perspective = this->declare_parameter("corner_refine.preserve_perspective", true);
+    config_.corner_refine.max_edge_angle_delta_deg = this->declare_parameter("corner_refine.max_edge_angle_delta_deg", 12.0);
+    config_.corner_refine.max_area_ratio_delta = this->declare_parameter("corner_refine.max_area_ratio_delta", 0.12);
+    config_.corner_refine.max_length_ratio_delta = this->declare_parameter("corner_refine.max_length_ratio_delta", 0.20);
+    config_.corner_refine.full_roi_expand_ratio = this->declare_parameter("corner_refine.full_roi_expand_ratio", 1.45);
+    config_.corner_refine.binary_threshold = this->declare_parameter("corner_refine.binary_threshold", 150.0);
+    config_.corner_refine.min_contour_area_px = this->declare_parameter("corner_refine.min_contour_area_px", 6.0);
+    config_.corner_refine.min_lightbar_length_px = this->declare_parameter("corner_refine.min_lightbar_length_px", 6.0);
+    config_.corner_refine.min_lightbar_ratio = this->declare_parameter("corner_refine.min_lightbar_ratio", 1.4);
+    config_.corner_refine.max_lightbar_ratio = this->declare_parameter("corner_refine.max_lightbar_ratio", 20.0);
+    config_.corner_refine.max_lightbar_angle_error_deg = this->declare_parameter("corner_refine.max_lightbar_angle_error_deg", 45.0);
+    config_.corner_refine.max_rectangular_error_deg = this->declare_parameter("corner_refine.max_rectangular_error_deg", 0.0);
+    config_.corner_refine.max_side_ratio = this->declare_parameter("corner_refine.max_side_ratio", 2.2);
+    config_.corner_refine.max_lightbar_match_error_px = this->declare_parameter("corner_refine.max_lightbar_match_error_px", 26.0);
+    config_.corner_refine.max_pair_center_shift_px = this->declare_parameter("corner_refine.max_pair_center_shift_px", 45.0);
   }
 
-  // async (Phase 6, placeholder)
+  // traditional_fusion: reuse armor_detector traditional lightbar pipeline as
+  // fallback/augmentation candidates before tracker and PnP.
   {
-    config_.async.enabled = this->declare_parameter("async.enabled", false);
-    config_.async.max_wait_ms = this->declare_parameter("async.max_wait_ms", 2.0);
-    config_.async.drop_if_busy = this->declare_parameter("async.drop_if_busy", true);
-    config_.async.max_observation_age_ms = this->declare_parameter("async.max_observation_age_ms", 100.0);
+    auto& tf = config_.traditional_fusion;
+    tf.enabled = this->declare_parameter("traditional_fusion.enabled", false);
+    tf.strategy = this->declare_parameter("traditional_fusion.strategy", "fallback");
+    tf.min_nn_detections =
+      this->declare_parameter("traditional_fusion.min_nn_detections", 1);
+    tf.confidence_scale =
+      static_cast<float>(this->declare_parameter(
+        "traditional_fusion.confidence_scale", 0.92));
+
+    tf.binary_thres =
+      this->declare_parameter("traditional_fusion.binary_thres", 160);
+    tf.light_min_ratio =
+      this->declare_parameter("traditional_fusion.light.min_ratio", 0.08);
+    tf.light_max_ratio =
+      this->declare_parameter("traditional_fusion.light.max_ratio", 0.4);
+    tf.light_max_angle =
+      this->declare_parameter("traditional_fusion.light.max_angle", 40.0);
+    tf.light_color_diff_thresh =
+      this->declare_parameter("traditional_fusion.light.color_diff_thresh", 25);
+
+    tf.armor_min_light_ratio =
+      this->declare_parameter("traditional_fusion.armor.min_light_ratio", 0.6);
+    tf.armor_min_small_center_distance =
+      this->declare_parameter("traditional_fusion.armor.min_small_center_distance", 0.8);
+    tf.armor_max_small_center_distance =
+      this->declare_parameter("traditional_fusion.armor.max_small_center_distance", 3.2);
+    tf.armor_min_large_center_distance =
+      this->declare_parameter("traditional_fusion.armor.min_large_center_distance", 3.2);
+    tf.armor_max_large_center_distance =
+      this->declare_parameter("traditional_fusion.armor.max_large_center_distance", 5.0);
+    tf.armor_max_angle =
+      this->declare_parameter("traditional_fusion.armor.max_angle", 35.0);
+
+    tf.use_classifier =
+      this->declare_parameter("traditional_fusion.use_classifier", true);
+    tf.classifier_threshold =
+      this->declare_parameter("traditional_fusion.classifier_threshold", 0.7);
+    tf.ignore_classes =
+      this->declare_parameter("traditional_fusion.ignore_classes",
+                              std::vector<std::string>{"negative"});
+    tf.use_pca =
+      this->declare_parameter("traditional_fusion.use_pca", true);
   }
 
   // runtime
   {
-    std::string profile_str = this->declare_parameter("runtime.platform_profile", "custom");
-    if (profile_str == "jetson") config_.runtime.platform_profile = PlatformProfile::JETSON;
-    else if (profile_str == "nuc_cpuonly") config_.runtime.platform_profile = PlatformProfile::NUC_CPUONLY;
-    else if (profile_str == "nuc_with_gpu") config_.runtime.platform_profile = PlatformProfile::NUC_WITH_GPU;
-    else config_.runtime.platform_profile = PlatformProfile::CUSTOM;
-
     std::string cfs = this->declare_parameter("runtime.color_filter_source", "model");
-    if (cfs == "image") config_.runtime.color_filter_source = ColorFilterSource::IMAGE;
-    else if (cfs == "disabled") config_.runtime.color_filter_source = ColorFilterSource::DISABLED;
+    if (cfs == "disabled") config_.runtime.color_filter_source = ColorFilterSource::DISABLED;
     else config_.runtime.color_filter_source = ColorFilterSource::MODEL;
     config_.runtime.publish_empty = this->declare_parameter("runtime.publish_empty", true);
-    config_.runtime.drop_frame_when_busy = this->declare_parameter("runtime.drop_frame_when_busy", true);
     std::string copy_policy_str = this->declare_parameter("runtime.copy_policy", "copy_on_write_debug");
-    std::string sched = this->declare_parameter("runtime.scheduling_mode", "sync");
-    config_.runtime.frame_queue_size = this->declare_parameter("runtime.frame_queue_size", 2);
-    config_.runtime.batch_min_size   = this->declare_parameter("runtime.batch_min_size", 1);
-    config_.runtime.batch_max_size   = this->declare_parameter("runtime.batch_max_size", 2);
-    config_.runtime.batch_timeout_ms  = this->declare_parameter("runtime.batch_timeout_ms", 2.0);
-    config_.runtime.max_observation_age_ms = this->declare_parameter("runtime.max_observation_age_ms", 50.0);
-    config_.runtime.publish_out_of_order = this->declare_parameter("runtime.publish_out_of_order", false);
     config_.runtime.profile = this->declare_parameter("runtime.profile", true);
-
-    if (sched == "async_latest") config_.runtime.scheduling_mode = SchedulingMode::ASYNC_LATEST;
-    else if (sched == "async_batch") config_.runtime.scheduling_mode = SchedulingMode::ASYNC_BATCH;
-    else config_.runtime.scheduling_mode = SchedulingMode::SYNC;
 
     if (copy_policy_str == "never_copy") config_.runtime.copy_policy = CopyPolicy::NEVER_COPY;
     else if (copy_policy_str == "always_copy") config_.runtime.copy_policy = CopyPolicy::ALWAYS_COPY;
@@ -359,33 +466,235 @@ void ArmorDetectorNNNode::validateParameters() {
     FYT_ERROR("armor_detector", "nms_threshold out of range, using default 0.45");
     config_.postprocess.nms_threshold = 0.45F;
   }
-  if (config_.runtime.batch_min_size < 1) {
-    config_.runtime.batch_min_size = 1;
+  if (config_.quality_filter.min_armor_ratio <= 0.0) {
+    config_.quality_filter.min_armor_ratio = 1.0;
   }
-  if (config_.runtime.batch_max_size < config_.runtime.batch_min_size) {
-    config_.runtime.batch_max_size = config_.runtime.batch_min_size;
+  if (config_.quality_filter.max_armor_ratio < config_.quality_filter.min_armor_ratio) {
+    config_.quality_filter.max_armor_ratio = config_.quality_filter.min_armor_ratio;
   }
-  if (config_.backend.cuda_stream_count < 1) {
-    config_.backend.cuda_stream_count = 1;
+  if (config_.quality_filter.max_side_ratio < 1.0) {
+    config_.quality_filter.max_side_ratio = 1.0;
   }
-  if (config_.backend.openvino_num_requests < 1) {
-    config_.backend.openvino_num_requests = 1;
+  if (config_.quality_filter.max_rectangular_error_deg < 0.0) {
+    config_.quality_filter.max_rectangular_error_deg = 25.0;
   }
+  if (config_.quality_filter.min_lightbar_length_px < 0.0) {
+    config_.quality_filter.min_lightbar_length_px = 0.0;
+  }
+  if (config_.quality_filter.min_area_px < 0.0) {
+    config_.quality_filter.min_area_px = 0.0;
+  }
+  if (config_.quality_filter.duplicate_iou_threshold < 0.0 ||
+      config_.quality_filter.duplicate_iou_threshold > 1.0) {
+    config_.quality_filter.duplicate_iou_threshold = 0.60;
+  }
+  if (config_.quality_filter.duplicate_keypoint_mean_dist_px < 0.0) {
+    config_.quality_filter.duplicate_keypoint_mean_dist_px = 0.0;
+  }
+  if (config_.pose.depth_correction.min_depth_delta_m < 0.0) {
+    config_.pose.depth_correction.min_depth_delta_m = 0.0;
+  }
+  config_.pose.depth_correction.blend_alpha =
+    std::clamp(config_.pose.depth_correction.blend_alpha, 0.0, 1.0);
+  if (config_.pose.depth_correction.max_correction_m < 0.0) {
+    config_.pose.depth_correction.max_correction_m = 0.0;
+  }
+  if (config_.pose.depth_correction.max_scale < 1.0) {
+    config_.pose.depth_correction.max_scale = 1.0;
+  }
+  if (config_.pose.depth_correction.min_lightbar_length_px < 0.0) {
+    config_.pose.depth_correction.min_lightbar_length_px = 0.0;
+  }
+  auto& tf = config_.traditional_fusion;
+  if (tf.strategy != "fallback" && tf.strategy != "always") {
+    FYT_ERROR("armor_detector",
+              "Unknown traditional_fusion.strategy '{}', using fallback",
+              tf.strategy.c_str());
+    tf.strategy = "fallback";
+  }
+  if (tf.min_nn_detections < 0) {
+    tf.min_nn_detections = 0;
+  }
+  tf.confidence_scale = std::clamp(tf.confidence_scale, 0.0F, 1.0F);
+  tf.binary_thres = std::clamp(tf.binary_thres, 0, 255);
+}
+
+void ArmorDetectorNNNode::initializeTraditionalDetector() {
+  const auto& tf = config_.traditional_fusion;
+  Detector::LightParams light_params{
+    .min_ratio = tf.light_min_ratio,
+    .max_ratio = tf.light_max_ratio,
+    .max_angle = tf.light_max_angle,
+    .color_diff_thresh = tf.light_color_diff_thresh};
+
+  Detector::ArmorParams armor_params{
+    .min_light_ratio = tf.armor_min_light_ratio,
+    .min_small_center_distance = tf.armor_min_small_center_distance,
+    .max_small_center_distance = tf.armor_max_small_center_distance,
+    .min_large_center_distance = tf.armor_min_large_center_distance,
+    .max_large_center_distance = tf.armor_max_large_center_distance,
+    .max_angle = tf.armor_max_angle};
+
+  const auto color = current_mode_ == DetectMode::BLUE
+                       ? fyt::EnemyColor::BLUE
+                       : fyt::EnemyColor::RED;
+  traditional_detector_ = std::make_unique<Detector>(
+    tf.binary_thres, color, light_params, armor_params);
+
+  if (tf.use_classifier) {
+    namespace fs = std::filesystem;
+    fs::path model_path = utils::URLResolver::getResolvedPath(
+      "package://armor_detector/model/lenet.onnx");
+    fs::path label_path = utils::URLResolver::getResolvedPath(
+      "package://armor_detector/model/label.txt");
+    if (fs::exists(model_path) && fs::exists(label_path)) {
+      traditional_detector_->classifier = std::make_unique<NumberClassifier>(
+        model_path.string(), label_path.string(),
+        tf.classifier_threshold, tf.ignore_classes);
+    } else {
+      FYT_ERROR("armor_detector",
+                "Traditional fusion classifier model not found: {}",
+                model_path.string().c_str());
+    }
+  }
+
+  if (tf.use_pca) {
+    traditional_detector_->corner_corrector =
+      std::make_unique<LightCornerCorrector>();
+  }
+
+  FYT_INFO("armor_detector",
+           "Traditional fusion initialized: strategy={}, classifier={}, pca={}",
+           tf.strategy.c_str(), static_cast<int>(tf.use_classifier),
+           static_cast<int>(tf.use_pca));
+}
+
+void ArmorDetectorNNNode::updateTraditionalDetectorColor() {
+  if (!traditional_detector_) {
+    return;
+  }
+  if (current_mode_ == DetectMode::RED) {
+    traditional_detector_->detect_color = fyt::EnemyColor::RED;
+  } else if (current_mode_ == DetectMode::BLUE) {
+    traditional_detector_->detect_color = fyt::EnemyColor::BLUE;
+  }
+}
+
+std::vector<ArmorDetection> ArmorDetectorNNNode::detectTraditional(
+    const cv::Mat& bgr_frame) {
+  std::vector<ArmorDetection> detections;
+  if (!traditional_detector_) {
+    return detections;
+  }
+
+  cv::Mat rgb_frame;
+  cv::cvtColor(bgr_frame, rgb_frame, cv::COLOR_BGR2RGB);
+  auto armors = traditional_detector_->detect(rgb_frame);
+  detections.reserve(armors.size());
+
+  for (const auto& armor : armors) {
+    if (armor.type == ArmorType::INVALID || armor.number.empty()) {
+      continue;
+    }
+    if (armor.number == "negative") {
+      continue;
+    }
+
+    ArmorDetection det;
+    det.publish_number = armor.number;
+    det.publish_type =
+      armor.type == ArmorType::LARGE ? "large" : "small";
+    det.color = traditional_detector_->detect_color;
+    det.confidence = std::clamp(
+      armor.confidence * config_.traditional_fusion.confidence_scale,
+      0.0F, 1.0F);
+    det.keypoints = {{
+      armor.left_light.bottom,
+      armor.left_light.top,
+      armor.right_light.top,
+      armor.right_light.bottom
+    }};
+    det = canonicalizeArmorDetectionGeometry(det);
+    det.bbox = bboxFromKeypoints(det.keypoints);
+    det.center =
+      (det.keypoints[0] + det.keypoints[1] +
+       det.keypoints[2] + det.keypoints[3]) * 0.25F;
+    det.model_label = traditionalModelLabel(det);
+    detections.push_back(std::move(det));
+  }
+
+  return detections;
+}
+
+std::vector<ArmorDetection> ArmorDetectorNNNode::mergeDetections(
+    const std::vector<ArmorDetection>& nn_detections,
+    const std::vector<ArmorDetection>& traditional_detections) const {
+  std::vector<ArmorDetection> merged = nn_detections;
+  merged.reserve(nn_detections.size() + traditional_detections.size());
+
+  constexpr float kDuplicateIoU = 0.35F;
+  constexpr float kDuplicateMeanKptDistPx = 12.0F;
+
+  for (const auto& candidate : traditional_detections) {
+    bool consumed = false;
+    for (auto& existing : merged) {
+      const bool same_color = existing.color == candidate.color;
+      if (!same_color) {
+        continue;
+      }
+      const bool bbox_duplicate =
+        rectIoU(existing.bbox, candidate.bbox) > kDuplicateIoU;
+      const bool keypoint_duplicate =
+        meanKeypointDistance(existing.keypoints, candidate.keypoints) <
+        kDuplicateMeanKptDistPx;
+      if (bbox_duplicate || keypoint_duplicate) {
+        if (candidate.confidence > existing.confidence) {
+          auto replacement = candidate;
+          replacement.track_id = existing.track_id;
+          replacement.track_age = existing.track_age;
+          replacement.track_hits = existing.track_hits;
+          existing = std::move(replacement);
+        }
+        consumed = true;
+        break;
+      }
+    }
+    if (!consumed) {
+      merged.push_back(candidate);
+    }
+  }
+
+  if (config_.quality_filter.enabled) {
+    merged = filterByGeometryQuality(merged, config_.quality_filter);
+    merged = suppressDuplicateDetections(merged, config_.quality_filter);
+  }
+  return merged;
 }
 
 void ArmorDetectorNNNode::imageCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr& img_msg)
 {
   if (current_mode_ == DetectMode::DISABLED) {
-    FYT_INFO("armor_detector", "Received image frame but detection is DISABLED. Ignoring.");
+    FYT_DEBUG("armor_detector", "Received image frame but detection is DISABLED. Ignoring.");
     return;
   }
-  if (!detector_ || !detector_->isInitialized()) {
-    FYT_ERROR("armor_detector", "Detector not initialized. Cannot process image.");
+  const bool nn_ready = detector_ && detector_->isInitialized();
+  if (!nn_ready && !traditional_detector_) {
+    FYT_ERROR("armor_detector",
+              "No initialized detector available. Cannot process image.");
     return;
+  }
+  if (!nn_ready) {
+    static bool warned_traditional_only = false;
+    if (!warned_traditional_only) {
+      FYT_WARN("armor_detector",
+               "NN detector is unavailable; using traditional fusion detector only.");
+      warned_traditional_only = true;
+    }
   }
 
-  FYT_INFO("armor_detector", "Received image frame (timestamp: {}.{})", img_msg->header.stamp.sec, img_msg->header.stamp.nanosec);
+  FYT_DEBUG("armor_detector", "Received image frame (timestamp: {}.{})",
+            img_msg->header.stamp.sec, img_msg->header.stamp.nanosec);
 
   auto t_start = std::chrono::steady_clock::now();
 
@@ -440,18 +749,44 @@ void ArmorDetectorNNNode::imageCallback(
     return;
   }
 
-  // Detect
-  auto results = detector_->detectBatch({frame}, {img_msg->header});
-  if (results.empty()) {
+  FrameDetections fd;
+  fd.header = img_msg->header;
+  if (nn_ready) {
+    auto results = detector_->detectBatch({frame}, {img_msg->header});
+    if (!results.empty()) {
+      fd = std::move(results[0]);
+    }
+  }
+
+  if (!nn_ready && !traditional_detector_) {
     if (config_.runtime.publish_empty) {
       publishEmptyArmors(img_msg->header);
     }
     return;
   }
 
-  auto& fd = results[0];
   for (auto& det : fd.detections) {
     det.stamp = img_msg->header.stamp;
+  }
+
+  if (traditional_detector_ && config_.traditional_fusion.enabled) {
+    const bool run_traditional =
+      config_.traditional_fusion.strategy == "always" ||
+      static_cast<int>(fd.detections.size()) <
+        config_.traditional_fusion.min_nn_detections;
+    if (run_traditional) {
+      updateTraditionalDetectorColor();
+      auto traditional = detectTraditional(frame);
+      for (auto& det : traditional) {
+        det.stamp = img_msg->header.stamp;
+      }
+      const auto nn_count = fd.detections.size();
+      const auto traditional_count = traditional.size();
+      fd.detections = mergeDetections(fd.detections, traditional);
+      FYT_DEBUG("armor_detector",
+                "Traditional fusion: nn={} traditional={} merged={}",
+                nn_count, traditional_count, fd.detections.size());
+    }
   }
 
   auto t_detect_end = std::chrono::steady_clock::now();
@@ -477,6 +812,23 @@ void ArmorDetectorNNNode::imageCallback(
       auto refine_res = corner_refiner_->refine(frame, det);
       if (refine_res.ok) {
         det.keypoints = refine_res.refined_keypoints;
+        det.center =
+          (det.keypoints[0] + det.keypoints[1] +
+           det.keypoints[2] + det.keypoints[3]) * 0.25F;
+        float min_x = det.keypoints[0].x;
+        float max_x = det.keypoints[0].x;
+        float min_y = det.keypoints[0].y;
+        float max_y = det.keypoints[0].y;
+        for (int k = 1; k < 4; ++k) {
+          min_x = std::min(min_x, det.keypoints[k].x);
+          max_x = std::max(max_x, det.keypoints[k].x);
+          min_y = std::min(min_y, det.keypoints[k].y);
+          max_y = std::max(max_y, det.keypoints[k].y);
+        }
+        det.bbox = cv::Rect2f(
+          min_x, min_y,
+          std::max(0.0F, max_x - min_x),
+          std::max(0.0F, max_y - min_y));
         refined_count++;
       }
     }
@@ -514,7 +866,7 @@ void ArmorDetectorNNNode::imageCallback(
       const auto& ref = poses_ref[i];
 
       if (!cur.valid || !ref.valid) {
-        FYT_INFO(
+        FYT_DEBUG(
           "armor_detector",
           "[PoseCmp] id={} num={} type={} cur_valid={} ref_valid={}",
           d.track_id, d.publish_number.c_str(), d.publish_type.c_str(),
@@ -526,7 +878,7 @@ void ArmorDetectorNNNode::imageCallback(
       double ry = rad2deg(ref.yaw), rp = rad2deg(ref.pitch), rr = rad2deg(ref.roll);
       double dy = wrapDeg(cy - ry), dp = wrapDeg(cp - rp), dr = wrapDeg(cr - rr);
 
-      FYT_INFO(
+      FYT_DEBUG(
         "armor_detector",
         "[PoseCmp] id={} num={} type={} mode={} ref_mode={}; cur(ypr)={:.2f}/{:.2f}/{:.2f} ref(ypr)={:.2f}/{:.2f}/{:.2f} d(ypr)={:.2f}/{:.2f}/{:.2f}; err(cur/ref)={:.3f}/{:.3f}",
         d.track_id, d.publish_number.c_str(), d.publish_type.c_str(),
@@ -637,16 +989,20 @@ void ArmorDetectorNNNode::imageCallback(
   // Profiler
   if (profiler_) {
     auto t_total = std::chrono::steady_clock::now();
-    ProfilerEntry entry = detector_->lastProfiler();
+    ProfilerEntry entry{};
+    if (detector_ && detector_->isInitialized()) {
+      entry = detector_->lastProfiler();
+    }
     entry.pose_ms  = std::chrono::duration<double, std::milli>(t_pose_end - t_start).count();
     entry.total_ms = std::chrono::duration<double, std::milli>(t_total - t_start).count();
     profiler_->record(entry);
   }
 
-  FYT_INFO("armor_detector", "Frame processed. Preprocess: {:.2f} ms, Detect: {:.2f} ms, Pose: {:.2f} ms",
-           std::chrono::duration<double, std::milli>(t_preprocess_end - t_start).count(),
-           std::chrono::duration<double, std::milli>(t_detect_end - t_preprocess_end).count(),
-           std::chrono::duration<double, std::milli>(t_pose_end - t_detect_end).count());
+  FYT_DEBUG("armor_detector",
+            "Frame processed. Preprocess: {:.2f} ms, Detect: {:.2f} ms, Pose: {:.2f} ms",
+            std::chrono::duration<double, std::milli>(t_preprocess_end - t_start).count(),
+            std::chrono::duration<double, std::milli>(t_detect_end - t_preprocess_end).count(),
+            std::chrono::duration<double, std::milli>(t_pose_end - t_detect_end).count());
 
 }
 
@@ -673,11 +1029,13 @@ void ArmorDetectorNNNode::setModeCallback(
     case VisionMode::AUTO_AIM_RED:
       current_mode_ = DetectMode::RED;
       if (detector_) detector_->setTargetColor(fyt::EnemyColor::RED);
+      updateTraditionalDetectorColor();
       FYT_INFO("armor_detector", "Mode set to RED");
       break;
     case VisionMode::AUTO_AIM_BLUE:
       current_mode_ = DetectMode::BLUE;
       if (detector_) detector_->setTargetColor(fyt::EnemyColor::BLUE);
+      updateTraditionalDetectorColor();
       FYT_INFO("armor_detector", "Mode set to BLUE");
       break;
     default:
@@ -801,7 +1159,13 @@ void ArmorDetectorNNNode::publishDebugImage(
   if (profiler_) {
     double fps = profiler_->avgFPS();
     double latency = profiler_->avgTotalMs();
-    auto bi = detector_->backendInfo();
+    BackendInfo bi;
+    if (detector_ && detector_->isInitialized()) {
+      bi = detector_->backendInfo();
+    } else {
+      bi.backend_name = "traditional";
+      bi.precision = "opencv";
+    }
     debug_drawer_->drawProfiler(debug_img, fps, latency,
                                 bi.backend_name, bi.precision);
     debug_drawer_->drawArmorsCount(debug_img, static_cast<int>(fd.detections.size()));
@@ -823,15 +1187,112 @@ rcl_interfaces::msg::SetParametersResult
 ArmorDetectorNNNode::onSetParameters(const std::vector<rclcpp::Parameter>& params) {
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
+  bool corner_refine_reconfigure = false;
 
   for (const auto& p : params) {
-    if (p.get_name() == "debug") {
+    const auto& name = p.get_name();
+    if (name == "debug") {
       debug_ = p.as_bool();
       debug_ ? createDebugPublishers() : destroyDebugPublishers();
-    } else if (p.get_name() == "debug_pose_compare") {
+    } else if (name == "debug_pose_compare") {
       debug_pose_compare_ = p.as_bool();
-    } else if (p.get_name() == "publish_in_target_frame") {
+    } else if (name == "publish_in_target_frame") {
       publish_in_target_frame_ = p.as_bool();
+    } else if (name == "corner_refine.enabled") {
+      config_.corner_refine.enabled = p.as_bool();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.method") {
+      config_.corner_refine.method = p.as_string();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.apply_on_confirmed_only") {
+      config_.corner_refine.apply_on_confirmed_only = p.as_bool();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_targets_per_frame") {
+      config_.corner_refine.max_targets_per_frame = p.as_int();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.time_budget_ms") {
+      config_.corner_refine.time_budget_ms = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.roi_expand_ratio") {
+      config_.corner_refine.roi_expand_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_bright_points") {
+      config_.corner_refine.min_bright_points = p.as_int();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.pca_stability_threshold") {
+      config_.corner_refine.pca_stability_threshold = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_aspect_ratio") {
+      config_.corner_refine.max_aspect_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_aspect_ratio") {
+      config_.corner_refine.min_aspect_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_corner_shift_px") {
+      config_.corner_refine.max_corner_shift_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_mean_corner_shift_px") {
+      config_.corner_refine.max_mean_corner_shift_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_refined_center_shift_px") {
+      config_.corner_refine.max_refined_center_shift_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_refine_quality") {
+      config_.corner_refine.min_refine_quality = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.preserve_perspective") {
+      config_.corner_refine.preserve_perspective = p.as_bool();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_edge_angle_delta_deg") {
+      config_.corner_refine.max_edge_angle_delta_deg = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_area_ratio_delta") {
+      config_.corner_refine.max_area_ratio_delta = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_length_ratio_delta") {
+      config_.corner_refine.max_length_ratio_delta = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.full_roi_expand_ratio") {
+      config_.corner_refine.full_roi_expand_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.binary_threshold") {
+      config_.corner_refine.binary_threshold = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_contour_area_px") {
+      config_.corner_refine.min_contour_area_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_lightbar_length_px") {
+      config_.corner_refine.min_lightbar_length_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.min_lightbar_ratio") {
+      config_.corner_refine.min_lightbar_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_lightbar_ratio") {
+      config_.corner_refine.max_lightbar_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_lightbar_angle_error_deg") {
+      config_.corner_refine.max_lightbar_angle_error_deg = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_rectangular_error_deg") {
+      config_.corner_refine.max_rectangular_error_deg = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_side_ratio") {
+      config_.corner_refine.max_side_ratio = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_lightbar_match_error_px") {
+      config_.corner_refine.max_lightbar_match_error_px = p.as_double();
+      corner_refine_reconfigure = true;
+    } else if (name == "corner_refine.max_pair_center_shift_px") {
+      config_.corner_refine.max_pair_center_shift_px = p.as_double();
+      corner_refine_reconfigure = true;
+    }
+  }
+
+  if (corner_refine_reconfigure) {
+    if (config_.corner_refine.enabled) {
+      corner_refiner_ = std::make_shared<RoiPcaCornerRefiner>(config_.corner_refine);
+    } else {
+      corner_refiner_.reset();
     }
   }
 

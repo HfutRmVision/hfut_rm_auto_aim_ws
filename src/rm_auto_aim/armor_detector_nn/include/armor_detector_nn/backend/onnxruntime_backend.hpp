@@ -40,6 +40,7 @@ private:
 
   std::vector<int64_t> input_shape_;
   std::vector<std::vector<int64_t>> output_shapes_;
+  bool input_is_fp16_{false};
 
   BackendInfo info_;
   bool loaded_{false};

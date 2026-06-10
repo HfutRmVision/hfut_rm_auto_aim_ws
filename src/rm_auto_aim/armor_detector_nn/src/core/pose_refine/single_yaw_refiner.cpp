@@ -230,12 +230,20 @@ PoseEstimate SingleYawRefiner::refine(
 {
   PoseEstimate result = pnp_result;
 
-  // Step 1: determine pitch / roll
-  double pitch = config_.pitch_deg_default * M_PI / 180.0;
-  if (config_.outpost_pitch_sign && pnp_result.publish_number == "outpost") {
-    pitch = -pitch;
+  // Step 1: determine pitch / roll.
+  // Prefer the current PnP orientation to avoid pushing angle-dependent
+  // geometry error into tz when the target is observed at large yaw.
+  double pitch = pnp_result.pitch;
+  if (!std::isfinite(pitch)) {
+    pitch = config_.pitch_deg_default * M_PI / 180.0;
+    if (config_.outpost_pitch_sign && pnp_result.publish_number == "outpost") {
+      pitch = -pitch;
+    }
   }
-  double roll  = config_.roll_deg_default * M_PI / 180.0;
+  double roll = pnp_result.roll;
+  if (!std::isfinite(roll)) {
+    roll = config_.roll_deg_default * M_PI / 180.0;
+  }
 
   // Step 2: yaw initial value from PnP rotation matrix using the
   // same extraction logic as armor_detector::BaSolver.

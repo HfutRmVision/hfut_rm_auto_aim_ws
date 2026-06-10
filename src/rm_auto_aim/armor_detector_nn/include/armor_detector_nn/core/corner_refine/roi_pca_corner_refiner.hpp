@@ -2,6 +2,8 @@
 #define ARMOR_DETECTOR_NN_ROI_PCA_CORNER_REFINER_HPP_
 
 #include <array>
+#include <chrono>
+#include <vector>
 
 #include <opencv2/core.hpp>
 
@@ -32,6 +34,49 @@ private:
     RefineFailReason reason{RefineFailReason::NONE};
   };
 
+  struct LightBarCandidate {
+    cv::Point2f top;
+    cv::Point2f bottom;
+    cv::Point2f center;
+    double angle{0.0};
+    double length{0.0};
+    double width{0.0};
+    double ratio{0.0};
+    double area{0.0};
+  };
+
+  RefineResult refineByLightbarRoi(
+    const cv::Mat& frame,
+    const ArmorDetection& detection,
+    const std::chrono::steady_clock::time_point& start);
+
+  RefineResult refineBySplitPca(
+    const cv::Mat& frame,
+    const ArmorDetection& detection,
+    const std::chrono::steady_clock::time_point& start);
+
+  std::vector<LightBarCandidate> detectLightBarsInRoi(
+    const cv::Mat& frame,
+    const cv::Rect& roi,
+    fyt::EnemyColor color) const;
+
+  bool acceptLightBar(const LightBarCandidate& lightbar) const;
+
+  static std::array<cv::Point2f, 4> cornersFromLightBars(
+    const LightBarCandidate& left,
+    const LightBarCandidate& right);
+
+  double pairScore(
+    const LightBarCandidate& left,
+    const LightBarCandidate& right,
+    const ArmorDetection& detection,
+    const std::array<cv::Point2f, 4>& refined) const;
+
+  cv::Rect extractArmorROI(
+    const std::array<cv::Point2f, 4>& corners) const;
+
+  static double angleDistance(double a, double b);
+
   // Extract left and right light-bar ROIs from the 4 keypoints.
   // Canonical keypoint order in this package:
   // [0]=left_bottom, [1]=left_top, [2]=right_top, [3]=right_bottom.
@@ -44,8 +89,15 @@ private:
     const cv::Rect2f& roi,
     fyt::EnemyColor color);
 
-  // Validate refined quadrilateral geometry.
-  bool validateGeometry(const std::array<cv::Point2f, 4>& corners);
+  // Validate refined quadrilateral geometry without forcing perspective
+  // trapezoids back to image-space rectangles.
+  bool validateGeometry(
+    const std::array<cv::Point2f, 4>& refined,
+    const std::array<cv::Point2f, 4>& original) const;
+
+  bool preservesPerspective(
+    const std::array<cv::Point2f, 4>& refined,
+    const std::array<cv::Point2f, 4>& original) const;
 
   // Compute a 0–1 quality score.
   static double computeQuality(

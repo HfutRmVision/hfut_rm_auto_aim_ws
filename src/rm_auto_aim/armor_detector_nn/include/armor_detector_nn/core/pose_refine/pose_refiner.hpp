@@ -13,8 +13,7 @@
 
 namespace fyt::auto_aim {
 
-// High-level refiner interface (Phase 1+).
-// Prefer this over IBundleAdjuster for new implementations.
+// High-level refiner interface.
 class IPoseRefiner {
 public:
   virtual ~IPoseRefiner() = default;

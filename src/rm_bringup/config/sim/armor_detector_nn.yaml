@@ -1,0 +1,316 @@
+# 神经网络装甲板识别器参数。该文件会传给名为 armor_detector 的 ROS2 节点。
+armor_detector:
+  ros__parameters:
+    # 是否发布调试图像/调试信息，并在图像上绘制检测结果和耗时等信息。
+    debug: true
+    # 位姿输出目标坐标系；检测器会把相机坐标系下的装甲板位姿转换到该坐标系。
+    target_frame: "odom"
+    # 是否发布/打印 PnP 原始位姿和优化后位姿的对比调试信息。
+    debug_pose_compare: false
+    # false: 保持检测结果在相机相关坐标系中；true: 结果直接发布到 target_frame。
+    publish_in_target_frame: false
+
+    # 推理后端配置：决定用 ONNX Runtime、OpenVINO 还是 TensorRT 加载网络。
+    backend:
+      # 推理后端类型，可选 onnxruntime/openvino/tensorrt。
+      type: "onnxruntime"
+      # 推理设备。onnxruntime 下常用 cpu/cuda；openvino 下常用 CPU/GPU/AUTO。
+      device: "cuda"
+      # 推理精度，可选 fp32/fp16/int8；需要后端和模型支持。
+      precision: "fp16"
+      # 原始模型路径，package:// 会通过 ROS package 路径解析。
+      model_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
+      # TensorRT engine 或后端缓存模型路径；当前 onnxruntime 配置下通常不会单独使用。
+      engine_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
+      # OpenVINO IR 模型 xml 路径；使用 OpenVINO IR 时填写。
+      openvino_model_xml: ""
+      # OpenVINO IR 权重 bin 路径；使用 OpenVINO IR 时填写。
+      openvino_model_bin: ""
+      # 网络输入 tensor 名称，需与导出的 ONNX/OpenVINO 模型一致。
+      input_name: "images"
+      # 网络输出 tensor 名称列表，需与模型输出一致。
+      output_names: ["output"]
+      # 启动时空跑推理次数，用于稳定 CUDA/OpenVINO/TensorRT 首帧耗时。
+      warmup_iterations: 10
+      # CPU 推理线程数；GPU 后端下影响较小或由后端自行处理。
+      num_threads: 2
+      # 主后端加载失败时是否自动切换到 fallback_type。
+      allow_fallback: true
+      # 备用推理后端类型。
+      fallback_type: "onnxruntime"
+
+    # 输入图像预处理：把相机图像转成网络输入 tensor。
+    preprocess:
+      # 网络输入宽度。
+      input_width: 640
+      # 网络输入高度。
+      input_height: 640
+      # 输入 tensor 排布；当前预处理实现按 NCHW 输出。
+      input_layout: "nchw"
+      # 网络期望颜色顺序；rgb 会从 ROS/OpenCV 的 BGR 图像转换到 RGB。
+      input_color: "rgb"
+      # resize 策略；letterbox 会等比例缩放并补边，保持角点回映射精度。
+      resize_mode: "letterbox"
+      # 是否做归一化。
+      normalize: true
+      # 归一化均值。当前实现公式为 value / std - mean。
+      mean: [0.0, 0.0, 0.0]
+      # 归一化尺度；255 表示把像素从 0-255 缩放到 0-1。
+      std: [255.0, 255.0, 255.0]
+      # letterbox 补边像素值。
+      pad_value: 114.0
+
+    # 后处理：把网络输出解码为类别、置信度、四个角点和 2D 框。
+    postprocess:
+      # 解码策略。robotpilots_landmark 对应 [1, N, 22] 的灯条/装甲板关键点模型。
+      strategy: "robotpilots_landmark"
+      # 输出 tensor 布局；candidates_first 表示候选框维度在前。
+      output_layout: "candidates_first"
+      # 类别总数。这里通常是蓝/红阵营各 7 类，共 14 类。
+      num_classes: 14
+      # 每个装甲板输出的关键点数量，四点对应装甲板四角。
+      num_keypoints: 4
+      # 每个关键点维度，2 表示 x/y。
+      keypoint_dims: 2
+      # bbox 字段在输出向量中的起始偏移；该策略主要从关键点生成 bbox。
+      bbox_offset: 0
+      # 类别字段在输出向量中的起始偏移。
+      class_offset: 4
+      # 关键点字段在输出向量中的起始偏移。
+      keypoint_offset: 18
+      # bbox 生成方式；xyxy_from_kpts 表示由四个关键点外接矩形得到 xyxy 框。
+      box_format: "xyxy_from_kpts"
+      # 置信度阈值，低于该值的候选会被丢弃。
+      conf_threshold: 0.7
+      # NMS 阈值，重叠程度超过该值的重复检测会被抑制。
+      nms_threshold: 0.3
+      # 单帧最多保留的检测数量。
+      max_detections: 32
+      # true: 不区分类别做 NMS；false: 按类别分别做 NMS。
+      class_agnostic_nms: false
+      # 关键点顺序重映射；几何 canonicalize 会再统一到 LB,LT,RT,RB。
+      keypoint_remap: [0, 1, 2, 3]
+      # 模型输出是否已经经过 sigmoid/softmax 等 head 激活处理。
+      head_already_applied: true
+      # 是否自动按几何关系重排关键点；大角度时可降低模型输出角点顺序错导致的 PnP 朝向翻转。
+      keypoint_auto_reorder: true
+
+    # 类别 ID 到装甲板语义标签的映射表。
+    label_map:
+      # label_map.yaml 路径，决定 class_id 对应 red_1/blue_1/outpost 等标签。
+      path: "package://armor_detector_nn/config/label_map.yaml"
+
+    # 检测质量过滤：参考 reference/sp_vision_25 的 detector 几何检查与重复装甲消解。
+    quality_filter:
+      # 开启后会用四角点几何关系过滤明显畸变的装甲板候选。
+      enabled: true
+      # 装甲板宽高比下限/上限，对应参考工程 min_armor_ratio/max_armor_ratio。
+      min_armor_ratio: 1.0
+      max_armor_ratio: 5.0
+      # 左右灯条长度比例上限，对应参考工程 max_side_ratio。
+      max_side_ratio: 1.5
+      # 灯条方向与装甲板横向夹角的最大误差，单位 deg。
+      max_rectangular_error_deg: 25.0
+      # 过小候选直接丢弃，避免远处噪点或退化角点进入 PnP。
+      min_lightbar_length_px: 4.0
+      min_area_px: 40.0
+      # 同一颜色下重叠候选只保留置信度最高的一个，抑制同目标多类别重复发布。
+      deduplicate_enabled: true
+      duplicate_iou_threshold: 0.60
+      duplicate_keypoint_mean_dist_px: 8.0
+
+    # 传统算法融合：复用 armor_detector 软件包中的灯条/数字分类/PCA 流程。
+    # fallback 表示 NN 输出不足时才运行传统检测；always 表示每帧都融合传统候选。
+    traditional_fusion:
+      enabled: true
+      strategy: "always"
+      min_nn_detections: 1
+      # 传统候选置信度缩放；重复目标默认仍优先相信 NN，传统主要用于补漏。
+      confidence_scale: 0.92
+      binary_thres: 120
+      light:
+        min_ratio: 0.08
+        max_ratio: 0.4
+        max_angle: 40.0
+        color_diff_thresh: 25
+      armor:
+        min_light_ratio: 0.6
+        min_small_center_distance: 0.8
+        max_small_center_distance: 3.2
+        min_large_center_distance: 3.2
+        max_large_center_distance: 5.0
+        max_angle: 35.0
+      use_classifier: true
+      classifier_threshold: 0.7
+      ignore_classes: ["negative"]
+      use_pca: true
+
+    # 3D 位姿估计与位姿优化参数。
+    pose:
+      # PnP 方法；ippe 适合平面矩形目标，能处理平面 PnP 的双解问题。
+      pnp_method: "ippe"
+      # 小装甲板实际宽度，单位 m。
+      small_armor_width: 0.133
+      # 小装甲板实际高度，单位 m。
+      small_armor_height: 0.050
+      # 大装甲板实际宽度，单位 m。
+      large_armor_width: 0.225
+      # 大装甲板实际高度，单位 m。
+      large_armor_height: 0.050
+      # 强制将 PnP 结果绕某轴旋转 180 度，用于处理特定模型/坐标系下的解方向歧义。
+      # 该键位于 pose 段内，ROS2 展开后的完整参数名是 pose.force_pnp_rotate_180。
+      force_pnp_rotate_180: false
+
+      # 大角度双板时，平面 PnP 容易把两块板都解得过近；这里用装甲板竖直边高度给深度加软下限。
+      depth_correction:
+        # true: 当竖直边高度估计距离明显大于 PnP 深度时，沿相机射线把位姿适度拉远。
+        enabled: true
+        # 高度估计距离至少比 PnP 深度大多少才触发，单位 m。
+        min_depth_delta_m: 0.06
+        # 向高度估计距离靠近的比例；不是硬替换，避免单帧噪声导致跳变。
+        blend_alpha: 0.85
+        # 单帧最多拉远多少，单位 m。
+        max_correction_m: 0.70
+        # 单帧深度最多放大到原 PnP 深度的多少倍。
+        max_scale: 1.40
+        # 左右竖直边小于该像素长度时不修正，避免远处极小目标被噪声放大。
+        min_lightbar_length_px: 4.0
+
+      # 位姿细化器选择。
+      refiner:
+        # none: 不细化；single_yaw: 单帧 yaw 优化；sliding_window: 多帧滑窗优化。
+        mode: "single_yaw"
+
+      # 单帧 yaw 优化参数。
+      single_yaw:
+        # 优化最大迭代次数。
+        max_iterations: 12
+        # Huber 损失阈值，降低异常角点对优化的影响，单位通常按像素残差理解。
+        huber_delta: 4.0
+        # 默认 pitch 角，单位 deg，用作单帧优化初值/先验。
+        pitch_deg_default: 15.0
+        # 默认 roll 角，单位 deg，用作单帧优化初值/先验。
+        roll_deg_default: 0.0
+        # 前哨站装甲板 pitch 符号修正开关。
+        outpost_pitch_sign: true
+
+      # 滑动窗口 BA 参数，用多帧观测共同优化位姿/yaw，提升稳定性。
+      sliding:
+        # 滑窗最多保留帧数。
+        window_size: 10
+        # 至少积累多少帧后启用滑窗优化。
+        min_frames: 3
+        # 滑窗覆盖的最大时间跨度，单位 ms。
+        max_time_span_ms: 450.0
+        # 单次优化允许的最大耗时，单位 ms。
+        max_solver_time_ms: 3.0
+        # 单次优化最大迭代次数。
+        max_opt_iters: 18
+        # x/y 平移先验标准差，单位 m；越小表示越信任先验。
+        sigma_prior_xy: 0.08
+        # z 平移先验标准差，单位 m。
+        sigma_prior_z: 0.15
+        # yaw 先验标准差，单位 rad。
+        sigma_prior_yaw: 0.55
+        # x/y 平移跨帧平滑标准差，单位 m；越小越平滑。
+        sigma_smooth_xy: 0.05
+        # z 平移跨帧平滑标准差，单位 m。
+        sigma_smooth_z: 0.10
+        # yaw 跨帧平滑标准差，单位 rad。
+        sigma_smooth_yaw: 0.12
+        # 角点测量噪声下限，单位 px。
+        sigma_kp_min: 1.5
+        # 角点测量噪声随检测不确定性放大的比例。
+        sigma_kp_scale: 7.0
+        # 滑窗优化 Huber 损失阈值。
+        huber_delta: 4.0
+
+      # 位姿结果门限，过滤优化失败或跳变过大的结果。
+      gate:
+        # 原始 PnP 的单点平均重投影误差上限，单位 px。
+        # <= 0 表示关闭该 gate。大角度退化样本建议开启，直接拦掉明显坏解。
+        max_raw_reproj_error: 4.0
+        # 最大允许重投影误差，单位 px。
+        max_reproj_error: 5.0
+        # 相邻结果最大允许位姿平移跳变，单位 m。
+        max_pose_delta_m: 0.35
+        # 相邻结果最大允许 yaw 跳变，单位 deg。
+        max_yaw_delta_deg: 35.0
+        # 是否要求输出位姿所有数值都是有限值，避免 NaN/Inf 发布。
+        require_finite: true
+
+    # 2D 目标跟踪，用于跨帧确认目标、减少抖动和误检。
+    tracker:
+      # 跟踪策略；internal_iou 表示使用内部 IoU tracker。
+      strategy: "internal_iou"
+      # IoU 匹配阈值，检测框与已有 track 的 IoU 大于该值才优先关联。
+      iou_threshold: 0.20
+      # track 最多允许连续丢失多少帧，超过后删除。
+      max_missed: 15
+      # track 至少命中多少次后视为 confirmed。
+      min_hits: 2
+      # 备用中心点距离匹配阈值，单位 px。
+      max_center_dist_px: 180
+
+    # 角点重求：参考 sp_vision_25，NN 角点只提供 ROI 初值，在 ROI 内用传统灯条检测重求四角点。
+    corner_refine:
+      # true: 对每个检测结果先尝试传统灯条重求角点；失败自动保留 NN 原始角点。
+      enabled: true
+      # sp25_lightbar: 整板 ROI 内二值化找左右灯条并覆盖角点；lightbar_roi: 原左右小 ROI PCA 精修。
+      method: "sp25_lightbar"
+      # sp25 方案不等待 2D tracker confirmed，否则首帧和新目标仍会使用 NN 偏移角点。
+      apply_on_confirmed_only: false
+      # 单帧最多处理目标数量；仿真中允许多板同时重求。
+      max_targets_per_frame: 8
+      # 单帧角点重求时间预算，单位 ms。
+      time_budget_ms: 4.0
+      # 左右小 ROI PCA 模式使用；sp25_lightbar 主要使用 full_roi_expand_ratio。
+      roi_expand_ratio: 1.1
+      # PCA 模式阈值；sp25_lightbar 只使用轮廓/minAreaRect，不依赖该值。
+      min_bright_points: 40
+      pca_stability_threshold: 0.80
+      # 重求后装甲板宽高比允许范围。
+      max_aspect_ratio: 5.0
+      min_aspect_ratio: 1.5
+      # 0 表示 sp25_lightbar 不用“小位移”约束拒绝结果；是否覆盖由灯条匹配距离/几何约束决定。
+      max_corner_shift_px: 0.0
+      max_mean_corner_shift_px: 0.0
+      max_refined_center_shift_px: 0.0
+      # 0 表示不要求重求角点贴近 NN 原始角点，避免 NN 已经偏移时正确灯条被拒绝。
+      min_refine_quality: 0.0
+      # 大角度装甲板在图像中应保持透视梯形，不允许精修强行拉回长方形。
+      preserve_perspective: true
+      # 精修后每条边相对 NN 原始四边形的最大方向变化，单位 deg。
+      max_edge_angle_delta_deg: 35.0
+      # sp25_lightbar 允许面积相对 NN 初值有较大变化，但仍限制异常放大/缩小。
+      max_area_ratio_delta: 0.65
+      # 精修后左右灯条长度比、上下边长度比相对原始投影的最大 log 变化。
+      max_length_ratio_delta: 0.55
+      # 整板 ROI 沿灯条方向和板宽方向扩张；过大容易引入邻近板灯条。
+      full_roi_expand_ratio: 1.45
+      # sp25 使用固定灰度阈值；比 OTSU 更不容易随 ROI 背景比例跳变。
+      binary_threshold: 120.0
+      # 轮廓/灯条几何过滤。
+      min_contour_area_px: 6.0
+      min_lightbar_length_px: 6.0
+      min_lightbar_ratio: 1.4
+      max_lightbar_ratio: 20.0
+      max_lightbar_angle_error_deg: 45.0
+      # 0 表示不使用“接近矩形”作为默认验收条件；大角度透视由 preserve_perspective 约束。
+      max_rectangular_error_deg: 0.0
+      # 只作为异常形状保护，不再用于把大角度梯形压回近矩形。
+      max_side_ratio: 2.2
+      # 候选灯条端点与 NN 初值的平均匹配距离上限；这是 sp25_lightbar 的主要防误匹配约束。
+      max_lightbar_match_error_px: 26.0
+      max_pair_center_shift_px: 45.0
+
+    # 运行时策略：控制颜色过滤、发布、图像拷贝和性能统计。
+    runtime:
+      # 颜色来源。model: 使用模型输出颜色；disabled: 不按颜色过滤。
+      color_filter_source: "model"
+      # 无检测结果时是否仍发布空消息，保持下游时间流连续。
+      publish_empty: true
+      # 图像拷贝策略。copy_on_write_debug: 正常少拷贝，调试绘制时再拷贝。
+      copy_policy: "copy_on_write_debug"
+      # 是否输出性能统计信息。
+      profile: true

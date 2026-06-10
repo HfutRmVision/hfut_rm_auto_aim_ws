@@ -51,11 +51,13 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${EIGEN3_INCLUDE_DIRS}
 )
 
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+  ${G2O_DEFINITIONS}
+)
+
 target_link_libraries(${PROJECT_NAME}
   ${OpenCV_LIBS}
-  g2o_core
-  g2o_stuff
-  g2o_solver_dense
+  ${G2O_LIBRARIES}
   fmt::fmt
 )
 

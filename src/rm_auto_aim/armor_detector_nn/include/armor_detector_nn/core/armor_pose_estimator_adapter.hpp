@@ -15,8 +15,6 @@
 
 namespace fyt::auto_aim {
 
-class IBundleAdjuster;
-
 enum class EstimateMode {
   LOST,               // PnP failed
   PNP_VALID,          // PnP only
@@ -58,10 +56,6 @@ public:
   explicit ArmorPoseEstimatorAdapter(const PoseConfig& config);
   ~ArmorPoseEstimatorAdapter();
 
-  // Set a custom BA adjuster. If not set and use_ba is true, a default
-  // implementation (if available) is used. Takes ownership.
-  void setBundleAdjuster(std::unique_ptr<IBundleAdjuster> adjuster);
-
   // Set a pose refiner (Phase 1+: single_yaw / sliding_window).
   void setRefiner(std::shared_ptr<IPoseRefiner> refiner);
 
@@ -95,7 +89,6 @@ private:
     const std::string& publish_number = "");
 
   PoseConfig config_;
-  std::unique_ptr<IBundleAdjuster> ba_adjuster_;
   std::shared_ptr<IPoseRefiner> refiner_;
 };
 

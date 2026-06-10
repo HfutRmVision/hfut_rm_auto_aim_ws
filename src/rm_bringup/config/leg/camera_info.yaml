@@ -1,19 +1,23 @@
-image_width: 1280
-image_height: 1024
-camera_name: narrow_stereo
+# Hikrobot MV-CS016-10UC + 6 mm C-Mount lens theoretical pinhole intrinsics.
+# Sensor mode: 1440x1080, pixel size: 3.45 um.
+# fx = fy = 6.0 mm / 0.00345 mm = 1739.130435 px.
+# Distortion should be replaced by real calibration data when available.
+image_width: 1440
+image_height: 1080
+camera_name: hik_camera
 
 camera_matrix:
   rows: 3
   cols: 3
-  data: [1555.584005, 0.0, 601.917321,
-         0.0, 1556.604282, 520.594632,
+  data: [1739.130435, 0.0, 719.5,
+         0.0, 1739.130435, 539.5,
          0.0, 0.0, 1.0]
 
 distortion_model: plumb_bob
 distortion_coefficients:
   rows: 1
   cols: 5
-  data: [-0.088955, 0.236487, 0.000057, 0.000518, 0.0]
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
 
 rectification_matrix:
   rows: 3
@@ -25,6 +29,6 @@ rectification_matrix:
 projection_matrix:
   rows: 3
   cols: 4
-  data: [1545.103149, 0.0, 602.524358, 0.0,
-         0.0, 1547.479492, 520.033579, 0.0,
+  data: [1739.130435, 0.0, 719.5, 0.0,
+         0.0, 1739.130435, 539.5, 0.0,
          0.0, 0.0, 1.0, 0.0]

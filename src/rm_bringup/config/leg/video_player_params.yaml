@@ -25,4 +25,4 @@ video_player:
     
     # Camera info URL (optional)
     # Example: "package://video_player/config/camera_info.yaml"
-    camera_info_url: "src/rm_hardware_driver/ros2_hik_camera/config/leg/camera_info.yaml"
+    camera_info_url: "package://rm_bringup/config/leg/camera_info.yaml"

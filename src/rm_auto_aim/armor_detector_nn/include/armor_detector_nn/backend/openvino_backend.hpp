@@ -30,7 +30,6 @@ public:
 private:
   void loadModel(const std::string& model_path, const std::string& bin_path,
                  const std::string& device, int num_threads);
-  void configurePreprocessing(const BackendConfig& config);
   void validateModelIO(const BackendConfig& config);
   void detectQuantizationPrecision();
   std::string selectAvailableDevice(const std::string& preferred_device);
@@ -45,7 +44,6 @@ private:
   std::vector<int64_t> input_shape_;
   std::vector<std::vector<int64_t>> output_shapes_;
 
-  bool use_native_preprocess_{false};
   bool is_int8_quantized_{false};
 
   BackendInfo info_;

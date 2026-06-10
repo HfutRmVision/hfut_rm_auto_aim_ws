@@ -88,11 +88,11 @@ def generate_launch_description():
         default_value=str(launch_params.get('use_camera_detector_container', True)).lower(),
         description='Put camera and detector in same container'
     )
-    declare_enable_auto_buff = DeclareLaunchArgument(
-        'enable_auto_buff',
-        default_value=str(launch_params.get('enable_auto_buff', False)).lower(),
-        description='Enable auto_buff detector + pose_estimator pipeline'
-    )
+    # declare_enable_auto_buff = DeclareLaunchArgument(
+    #     'enable_auto_buff',
+    #     default_value=str(launch_params.get('enable_auto_buff', False)).lower(),
+    #     description='Enable auto_buff detector + pose_estimator pipeline'
+    # )
 
     # ── URDF 机器人描述 ──
     robot_gimbal_description = Command(['xacro ', os.path.join(
@@ -183,61 +183,61 @@ def generate_launch_description():
     )
 
     # ==================== AutoBuff 链路 (可选) ====================
-    buff_detector_node = Node(
-        package='auto_buff',
-        executable='buff_detector_node',
-        name='buff_detector',
-        output='both',
-        emulate_tty=True,
-        parameters=get_pkg_params_with_robot_override('auto_buff', 'buff_detector.yaml'),
-        condition=IfCondition(LaunchConfiguration('enable_auto_buff')),
-    )
+    # buff_detector_node = Node(
+    #     package='auto_buff',
+    #     executable='buff_detector_node',
+    #     name='buff_detector',
+    #     output='both',
+    #     emulate_tty=True,
+    #     parameters=get_pkg_params_with_robot_override('auto_buff', 'buff_detector.yaml'),
+    #     condition=IfCondition(LaunchConfiguration('enable_auto_buff')),
+    # )
 
-    buff_pose_estimator_node = Node(
-        package='auto_buff',
-        executable='buff_pose_estimator_node',
-        name='buff_pose_estimator',
-        output='both',
-        emulate_tty=True,
-        parameters=get_pkg_params_with_robot_override('auto_buff', 'buff_pose_estimator.yaml'),
-        condition=IfCondition(LaunchConfiguration('enable_auto_buff')),
-    )
+    # buff_pose_estimator_node = Node(
+    #     package='auto_buff',
+    #     executable='buff_pose_estimator_node',
+    #     name='buff_pose_estimator',
+    #     output='both',
+    #     emulate_tty=True,
+    #     parameters=get_pkg_params_with_robot_override('auto_buff', 'buff_pose_estimator.yaml'),
+    #     condition=IfCondition(LaunchConfiguration('enable_auto_buff')),
+    # )
 
     # ==================== 相机+检测器 容器 ====================
     use_container = str(launch_params.get('use_camera_detector_container', True)).lower() == 'true'
 
     # 根据 image_source 获取相机节点的 (package, executable, parameters) 配置
-    def get_camera_node_config(image_source):
-        if image_source == 'video':
-            return {
-                'package': 'video_player',
-                'executable': 'video_player_node',
-                'name': 'video_player',
-                'parameters': [get_bringup_params('video_player')],
-            }
-        elif image_source == 'mindvision':
-            return {
-                'package': 'mindvision_camera',
-                'executable': 'mindvision_camera_node',
-                'name': 'mv_camera',
-                'parameters': [get_bringup_params('mindvision_camera_driver')],
-            }
-        elif image_source == 'hik':
-            return {
-                'package': 'ros2_hik_camera',
-                'executable': 'ros2_hik_camera_node',
-                'name': 'hik_camera',
-                'parameters': [get_bringup_params('hik_camera_driver')],
-                'env': {'MVCAM_SDK_PATH': '/opt/MVS',
-                         'MVCAM_COMMON_RUNENV': '/opt/MVS/lib'},
-            }
-        else:
-            return {
-                'package': 'mindvision_camera',
-                'executable': 'mindvision_camera_node',
-                'name': 'camera_driver',
-                'parameters': [get_bringup_params('camera_driver')],
-            }
+    # def get_camera_node_config(image_source):
+    #     if image_source == 'video':
+    #         return {
+    #             'package': 'video_player',
+    #             'executable': 'video_player_node',
+    #             'name': 'video_player',
+    #             'parameters': [get_bringup_params('video_player')],
+    #         }
+    #     elif image_source == 'mindvision':
+    #         return {
+    #             'package': 'mindvision_camera',
+    #             'executable': 'mindvision_camera_node',
+    #             'name': 'mv_camera',
+    #             'parameters': [get_bringup_params('mindvision_camera_driver')],
+    #         }
+    #     elif image_source == 'hik':
+    #         return {
+    #             'package': 'ros2_hik_camera',
+    #             'executable': 'ros2_hik_camera_node',
+    #             'name': 'hik_camera',
+    #             'parameters': [get_bringup_params('hik_camera_driver')],
+    #             'env': {'MVCAM_SDK_PATH': '/opt/MVS',
+    #                      'MVCAM_COMMON_RUNENV': '/opt/MVS/lib'},
+    #         }
+    #     else:
+    #         return {
+    #             'package': 'mindvision_camera',
+    #             'executable': 'mindvision_camera_node',
+    #             'name': 'camera_driver',
+    #             'parameters': [get_bringup_params('camera_driver')],
+    #         }
 
     # 获取 detector 独立节点配置
     def get_detector_node_config():
@@ -402,7 +402,7 @@ def generate_launch_description():
         declare_namespace,
         declare_detector_type,
         declare_use_container,
-        declare_enable_auto_buff,
+        # declare_enable_auto_buff,
 
         robot_gimbal_publisher,
         push_namespace,

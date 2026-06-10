@@ -17,7 +17,8 @@ enum class RefineFailReason {
   PCA_UNSTABLE,
   GEOMETRY_INVALID,
   TIMEOUT,
-  REFINE_WORSE
+  REFINE_WORSE,
+  NO_LIGHTBAR_PAIR
 };
 
 struct RefineResult {

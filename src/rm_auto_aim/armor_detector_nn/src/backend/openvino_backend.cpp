@@ -75,8 +75,6 @@ void OpenVINOBackend::load(const BackendConfig& config) {
     throw std::runtime_error("OpenVINOBackend: no available device found");
   }
 
-  use_native_preprocess_ = false;  // gated by config in future
-
   FYT_INFO("armor_detector_nn", "OpenVINOBackend loading: %s on %s",
            model_path.c_str(), device.c_str());
 
@@ -189,11 +187,6 @@ void OpenVINOBackend::loadModel(const std::string& model_path,
     throw std::runtime_error("OpenVINOBackend: failed to read model from " + model_path);
   }
 
-  // Configure preprocessing if native mode
-  if (use_native_preprocess_) {
-    configurePreprocessing(BackendConfig{});
-  }
-
   // Compile for latency — pass properties as variadic arguments to compile_model
   compiled_model_ = std::make_unique<ov::CompiledModel>(
     core_->compile_model(model, device,
@@ -224,12 +217,6 @@ void OpenVINOBackend::loadModel(const std::string& model_path,
                output_shapes_[i][0], output_shapes_[i][1], output_shapes_[i][2]);
     }
   }
-}
-
-void OpenVINOBackend::configurePreprocessing(const BackendConfig& /*config*/) {
-  // Reserved: configure ov::preprocess::PrePostProcessor for
-  // native color conversion, resize, and normalization.
-  // Not implemented in Phase 6 — uses external Preprocessor instead.
 }
 
 void OpenVINOBackend::validateModelIO(const BackendConfig& config) {

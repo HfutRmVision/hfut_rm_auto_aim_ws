@@ -4,6 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "armor_detector_nn/postprocess/detection_quality_filter.hpp"
+
 namespace fyt::auto_aim {
 
 std::vector<RawDetection> UltralyticsPoseDecodeStrategy::decode(
@@ -101,14 +103,20 @@ bool UltralyticsPoseDecodeStrategy::decodeCandidate(
   // Apply keypoint remap to canonical order
   if (!config.keypoint_remap.empty() &&
       config.keypoint_remap.size() == static_cast<size_t>(config.num_keypoints)) {
-    std::array<cv::Point2f, 4> remapped;
+    std::array<cv::Point2f, 4> remapped = detection.keypoints;
+    bool valid_remap = true;
     for (int k = 0; k < config.num_keypoints; ++k) {
       int src = config.keypoint_remap[k];
       if (src >= 0 && src < config.num_keypoints) {
         remapped[k] = detection.keypoints[src];
+      } else {
+        valid_remap = false;
+        break;
       }
     }
-    detection.keypoints = remapped;
+    if (valid_remap) {
+      detection.keypoints = remapped;
+    }
   }
 
   return true;
@@ -143,7 +151,7 @@ void UltralyticsPoseDecodeStrategy::restoreBbox(
 void UltralyticsPoseDecodeStrategy::restoreKeypoints(
     RawDetection& detection,
     const ImageMeta& meta,
-    const PostprocessConfig& /*config*/) const
+    const PostprocessConfig& config) const
 {
   for (auto& kp : detection.keypoints) {
     kp.x = (kp.x - meta.pad_left) / meta.scale_x;
@@ -151,6 +159,10 @@ void UltralyticsPoseDecodeStrategy::restoreKeypoints(
 
     kp.x = std::max(0.0F, std::min(kp.x, static_cast<float>(meta.original_width)));
     kp.y = std::max(0.0F, std::min(kp.y, static_cast<float>(meta.original_height)));
+  }
+
+  if (config.keypoint_auto_reorder) {
+    detection.keypoints = canonicalArmorKeypoints(detection.keypoints);
   }
 }
 
