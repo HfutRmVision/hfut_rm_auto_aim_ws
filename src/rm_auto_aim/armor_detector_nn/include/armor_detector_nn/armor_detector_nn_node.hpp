@@ -55,16 +55,12 @@ private:
     const FrameDetections& fd,
     const std::vector<PoseEstimate>& poses);
   void createDebugPublishers();
-  void destroyDebugPublishers();
   void initializeTraditionalDetector();
   void updateTraditionalDetectorColor();
   std::vector<ArmorDetection> detectTraditional(const cv::Mat& bgr_frame);
   std::vector<ArmorDetection> mergeDetections(
     const std::vector<ArmorDetection>& nn_detections,
     const std::vector<ArmorDetection>& traditional_detections) const;
-
-  rcl_interfaces::msg::SetParametersResult
-  onSetParameters(const std::vector<rclcpp::Parameter>& params);
 
   DetectorConfig config_;
   DetectMode current_mode_{DetectMode::DISABLED};
@@ -88,10 +84,6 @@ private:
 
   // Heartbeat
   HeartBeatPublisher::SharedPtr heartbeat_;
-
-  // Parameter callback
-  rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr
-    on_set_parameters_callback_handle_;
 
   // Pipeline
   std::unique_ptr<ArmorDetectorNN> detector_;

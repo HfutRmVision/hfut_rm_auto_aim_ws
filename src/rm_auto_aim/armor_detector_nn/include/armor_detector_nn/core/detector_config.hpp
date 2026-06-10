@@ -43,9 +43,7 @@ struct BackendConfig {
 struct PreprocessConfig {
   int input_width{640};
   int input_height{640};
-  std::string input_layout{"nchw"};
   std::string input_color{"rgb"};
-  std::string resize_mode{"letterbox"};
   bool normalize{true};
   std::vector<double> mean{0.0, 0.0, 0.0};
   std::vector<double> std{255.0, 255.0, 255.0};
@@ -54,20 +52,17 @@ struct PreprocessConfig {
 
 struct PostprocessConfig {
   std::string strategy{"ultralytics_pose"};
-  std::string output_layout{"channels_first"};
   int num_classes{14};
   int num_keypoints{4};
   int keypoint_dims{2};
   int bbox_offset{0};
   int class_offset{4};
   int keypoint_offset{18};
-  std::string box_format{"cxcywh"};
   float conf_threshold{0.35F};
   float nms_threshold{0.45F};
   int max_detections{32};
   bool class_agnostic_nms{false};
   std::vector<int> keypoint_remap{1, 0, 3, 2};
-  bool head_already_applied{true};
   bool keypoint_auto_reorder{false};
 };
 
@@ -223,7 +218,6 @@ struct RuntimeConfig {
 };
 
 struct DetectorConfig {
-  bool debug{false};
   std::string target_frame{"odom"};
 
   BackendConfig backend;

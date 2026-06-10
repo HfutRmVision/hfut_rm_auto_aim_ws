@@ -178,11 +178,6 @@ ArmorDetectorNNNode::ArmorDetectorNNNode(const rclcpp::NodeOptions& options)
     profiler_ = std::make_unique<Profiler>();
   }
 
-  // --- parameter callback ---
-  on_set_parameters_callback_handle_ =
-    this->add_on_set_parameters_callback(
-      std::bind(&ArmorDetectorNNNode::onSetParameters, this, std::placeholders::_1));
-
   // --- heartbeat ---
   heartbeat_ = HeartBeatPublisher::create(this);
 
@@ -231,9 +226,7 @@ void ArmorDetectorNNNode::initializeParameters() {
   {
     config_.preprocess.input_width  = this->declare_parameter("preprocess.input_width", 640);
     config_.preprocess.input_height = this->declare_parameter("preprocess.input_height", 640);
-    config_.preprocess.input_layout = this->declare_parameter("preprocess.input_layout", "nchw");
     config_.preprocess.input_color  = this->declare_parameter("preprocess.input_color", "rgb");
-    config_.preprocess.resize_mode  = this->declare_parameter("preprocess.resize_mode", "letterbox");
     config_.preprocess.normalize    = this->declare_parameter("preprocess.normalize", true);
     config_.preprocess.mean = this->declare_parameter("preprocess.mean",
                                   std::vector<double>{0.0, 0.0, 0.0});
@@ -248,14 +241,12 @@ void ArmorDetectorNNNode::initializeParameters() {
   // postprocess
   {
     config_.postprocess.strategy = this->declare_parameter("postprocess.strategy", "ultralytics_pose");
-    config_.postprocess.output_layout = this->declare_parameter("postprocess.output_layout", "channels_first");
     config_.postprocess.num_classes     = this->declare_parameter("postprocess.num_classes", 14);
     config_.postprocess.num_keypoints   = this->declare_parameter("postprocess.num_keypoints", 4);
     config_.postprocess.keypoint_dims   = this->declare_parameter("postprocess.keypoint_dims", 2);
     config_.postprocess.bbox_offset     = this->declare_parameter("postprocess.bbox_offset", 0);
     config_.postprocess.class_offset    = this->declare_parameter("postprocess.class_offset", 4);
     config_.postprocess.keypoint_offset = this->declare_parameter("postprocess.keypoint_offset", 18);
-    config_.postprocess.box_format      = this->declare_parameter("postprocess.box_format", "cxcywh");
     config_.postprocess.conf_threshold  = this->declare_parameter("postprocess.conf_threshold", 0.35);
     config_.postprocess.nms_threshold   = this->declare_parameter("postprocess.nms_threshold", 0.45);
     config_.postprocess.max_detections   = this->declare_parameter("postprocess.max_detections", 32);
@@ -265,7 +256,6 @@ void ArmorDetectorNNNode::initializeParameters() {
                     std::vector<int64_t>{1, 0, 3, 2});
       config_.postprocess.keypoint_remap.assign(remap.begin(), remap.end());
     }
-    config_.postprocess.head_already_applied = this->declare_parameter("postprocess.head_already_applied", true);
     config_.postprocess.keypoint_auto_reorder = this->declare_parameter("postprocess.keypoint_auto_reorder", false);
   }
 
@@ -1177,126 +1167,6 @@ void ArmorDetectorNNNode::publishDebugImage(
 
 void ArmorDetectorNNNode::createDebugPublishers() {
   result_img_pub_ = image_transport::create_publisher(this, "armor_detector/result_img");
-}
-
-void ArmorDetectorNNNode::destroyDebugPublishers() {
-  result_img_pub_.shutdown();
-}
-
-rcl_interfaces::msg::SetParametersResult
-ArmorDetectorNNNode::onSetParameters(const std::vector<rclcpp::Parameter>& params) {
-  rcl_interfaces::msg::SetParametersResult result;
-  result.successful = true;
-  bool corner_refine_reconfigure = false;
-
-  for (const auto& p : params) {
-    const auto& name = p.get_name();
-    if (name == "debug") {
-      debug_ = p.as_bool();
-      debug_ ? createDebugPublishers() : destroyDebugPublishers();
-    } else if (name == "debug_pose_compare") {
-      debug_pose_compare_ = p.as_bool();
-    } else if (name == "publish_in_target_frame") {
-      publish_in_target_frame_ = p.as_bool();
-    } else if (name == "corner_refine.enabled") {
-      config_.corner_refine.enabled = p.as_bool();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.method") {
-      config_.corner_refine.method = p.as_string();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.apply_on_confirmed_only") {
-      config_.corner_refine.apply_on_confirmed_only = p.as_bool();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_targets_per_frame") {
-      config_.corner_refine.max_targets_per_frame = p.as_int();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.time_budget_ms") {
-      config_.corner_refine.time_budget_ms = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.roi_expand_ratio") {
-      config_.corner_refine.roi_expand_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_bright_points") {
-      config_.corner_refine.min_bright_points = p.as_int();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.pca_stability_threshold") {
-      config_.corner_refine.pca_stability_threshold = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_aspect_ratio") {
-      config_.corner_refine.max_aspect_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_aspect_ratio") {
-      config_.corner_refine.min_aspect_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_corner_shift_px") {
-      config_.corner_refine.max_corner_shift_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_mean_corner_shift_px") {
-      config_.corner_refine.max_mean_corner_shift_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_refined_center_shift_px") {
-      config_.corner_refine.max_refined_center_shift_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_refine_quality") {
-      config_.corner_refine.min_refine_quality = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.preserve_perspective") {
-      config_.corner_refine.preserve_perspective = p.as_bool();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_edge_angle_delta_deg") {
-      config_.corner_refine.max_edge_angle_delta_deg = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_area_ratio_delta") {
-      config_.corner_refine.max_area_ratio_delta = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_length_ratio_delta") {
-      config_.corner_refine.max_length_ratio_delta = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.full_roi_expand_ratio") {
-      config_.corner_refine.full_roi_expand_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.binary_threshold") {
-      config_.corner_refine.binary_threshold = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_contour_area_px") {
-      config_.corner_refine.min_contour_area_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_lightbar_length_px") {
-      config_.corner_refine.min_lightbar_length_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.min_lightbar_ratio") {
-      config_.corner_refine.min_lightbar_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_lightbar_ratio") {
-      config_.corner_refine.max_lightbar_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_lightbar_angle_error_deg") {
-      config_.corner_refine.max_lightbar_angle_error_deg = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_rectangular_error_deg") {
-      config_.corner_refine.max_rectangular_error_deg = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_side_ratio") {
-      config_.corner_refine.max_side_ratio = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_lightbar_match_error_px") {
-      config_.corner_refine.max_lightbar_match_error_px = p.as_double();
-      corner_refine_reconfigure = true;
-    } else if (name == "corner_refine.max_pair_center_shift_px") {
-      config_.corner_refine.max_pair_center_shift_px = p.as_double();
-      corner_refine_reconfigure = true;
-    }
-  }
-
-  if (corner_refine_reconfigure) {
-    if (config_.corner_refine.enabled) {
-      corner_refiner_ = std::make_shared<RoiPcaCornerRefiner>(config_.corner_refine);
-    } else {
-      corner_refiner_.reset();
-    }
-  }
-
-  return result;
 }
 
 }  // namespace fyt::auto_aim
