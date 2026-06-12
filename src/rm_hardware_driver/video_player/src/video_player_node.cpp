@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 
 // ROS
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
@@ -14,12 +15,52 @@
 #include <sensor_msgs/msg/image.hpp>
 
 // C++ system
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
 
 namespace video_player
 {
+
+namespace
+{
+
+std::string resolvePackageUrl(const std::string & path)
+{
+  const std::string prefix = "package://";
+  if (path.rfind(prefix, 0) != 0) {
+    return path;
+  }
+
+  const auto slash = path.find('/', prefix.size());
+  if (slash == std::string::npos) {
+    return path;
+  }
+
+  const auto package_name = path.substr(prefix.size(), slash - prefix.size());
+  const auto relative_path = path.substr(slash + 1);
+  try {
+    return ament_index_cpp::get_package_share_directory(package_name) + "/" + relative_path;
+  } catch (const std::exception &) {
+    return path;
+  }
+}
+
+bool isGitLfsPointer(const std::string & path)
+{
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    return false;
+  }
+
+  std::string first_line;
+  std::getline(file, first_line);
+  return first_line == "version https://git-lfs.github.com/spec/v1";
+}
+
+}  // namespace
+
 class VideoPlayerNode : public rclcpp::Node
 {
 public:
@@ -28,12 +69,11 @@ public:
     RCLCPP_INFO(this->get_logger(), "Starting VideoPlayerNode!");
 
     // Declare parameters
-    video_path_ = this->declare_parameter("video_path", "");
-    std::cout << "Video path parameter declared: " << video_path_ << std::endl;
+    video_path_ = resolvePackageUrl(this->declare_parameter("video_path", ""));
     loop_playback_ = this->declare_parameter("loop_playback", true);
     fps_ = this->declare_parameter("fps", 30.0);
-    std::cout << "FPS parameter declared: " << fps_ << std::endl;
-    camera_name_ = this->declare_parameter("camera_name", "video_camera");
+    camera_name_ = this->declare_parameter("camera_name", "camera");
+    frame_id_ = this->declare_parameter("frame_id", "camera_optical_frame");
     flip_image_ = this->declare_parameter("flip_image", false);
     image_topic_ = this->declare_parameter("image_topic", "image_raw");
     
@@ -45,6 +85,13 @@ public:
     // Open video file
     cap_.open(video_path_);
     if (!cap_.isOpened()) {
+      if (isGitLfsPointer(video_path_)) {
+        RCLCPP_ERROR(
+          this->get_logger(),
+          "Video file is a Git LFS pointer, not media data. Install/fix git-lfs and pull it: %s",
+          video_path_.c_str());
+        return;
+      }
       RCLCPP_ERROR(this->get_logger(), "Failed to open video file: %s", video_path_.c_str());
       return;
     }
@@ -151,12 +198,9 @@ public:
 
         // Convert to ROS message
         auto now = this->now();
-  std_msgs::msg::Header header;
-  header.stamp = now;
-  // Use camera_name_ to create a unique frame id per-instance so multiple
-  // video_player nodes (in different namespaces) don't publish identical
-  // frame ids. Example: camera_name_="camera1" -> "camera1_optical_frame".
-  header.frame_id = camera_name_ + std::string("_optical_frame");
+        std_msgs::msg::Header header;
+        header.stamp = now;
+        header.frame_id = frame_id_;
 
         cv_bridge::CvImage cv_image(header, "bgr8", frame);
         sensor_msgs::msg::Image::SharedPtr image_msg = cv_image.toImageMsg();
@@ -210,6 +254,7 @@ private:
   bool loop_playback_;
   double fps_;
   std::string camera_name_;
+  std::string frame_id_;
   bool flip_image_;
   std::string image_topic_;
 

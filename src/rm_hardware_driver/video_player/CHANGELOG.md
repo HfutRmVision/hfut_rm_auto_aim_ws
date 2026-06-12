@@ -32,7 +32,8 @@
 - `video_path`: 视频文件路径（必需）
 - `fps`: 播放帧率（默认 30.0）
 - `loop_playback`: 循环播放（默认 true）
-- `camera_name`: 相机名称（默认 "video_camera"）
+- `camera_name`: 相机名称（默认 "camera"）
+- `frame_id`: 图像和 CameraInfo 的 frame_id（默认 "camera_optical_frame"）
 - `flip_image`: 翻转图像（默认 false）
 - `camera_info_url`: 相机标定文件 URL（可选）
 - `use_sensor_data_qos`: 使用 sensor_data QoS（默认 false）

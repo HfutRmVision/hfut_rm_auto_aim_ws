@@ -2,8 +2,7 @@ video_player:
   ros__parameters:
     # Path to the video file (required)
     # Example: "/path/to/your/video.mp4"
-    # video_path: "./src/rm_hardware_driver/video_player/video/output.avi"
-    video_path: "decoded/output.mp4"
+    video_path: "package://video_player/video/output.avi"
     
     # Whether to loop the video playback
     loop_playback: true
@@ -12,7 +11,10 @@ video_player:
     fps: 250.0
     
     # Camera name for camera info manager
-    camera_name: "video_camera"
+    camera_name: "camera"
+
+    # Frame id used by published Image and CameraInfo messages
+    frame_id: "camera_optical_frame"
     
     # Flip image (both horizontal and vertical)
     flip_image: false
@@ -25,4 +27,4 @@ video_player:
     
     # Camera info URL (optional)
     # Example: "package://video_player/config/camera_info.yaml"
-    camera_info_url: "src/rm_hardware_driver/ros2_hik_camera/config/camera_info.yaml"
+    camera_info_url: "package://video_player/config/camera_info.yaml"

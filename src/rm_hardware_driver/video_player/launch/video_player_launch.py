@@ -14,13 +14,14 @@ def generate_launch_description():
     # Default config files
     params_file = os.path.join(pkg_dir, 'config', 'video_params.yaml')
     print(f"Using params file: {params_file}")
+    video_path = 'package://video_player/video/output.avi'
     camera_info_url = 'package://video_player/config/camera_info.yaml'
 
     return LaunchDescription([
         # Declare launch arguments
         DeclareLaunchArgument(
             name='video_path',
-            default_value='',
+            default_value=video_path,
             description='Path to the video file to play'
         ),
         DeclareLaunchArgument(
@@ -63,6 +64,14 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[
                 LaunchConfiguration('params_file'),
+                {
+                    'video_path': LaunchConfiguration('video_path'),
+                    'camera_info_url': LaunchConfiguration('camera_info_url'),
+                    'use_sensor_data_qos': LaunchConfiguration('use_sensor_data_qos'),
+                    'loop_playback': LaunchConfiguration('loop_playback'),
+                    'fps': LaunchConfiguration('fps'),
+                    'flip_image': LaunchConfiguration('flip_image'),
+                },
             ],
         )
     ])

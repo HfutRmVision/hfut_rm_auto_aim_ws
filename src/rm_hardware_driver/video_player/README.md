@@ -70,7 +70,8 @@ ros2 run video_player video_player_node \
 | `video_path` | string | "" | 视频文件路径（必需） |
 | `fps` | double | 30.0 | 播放帧率 |
 | `loop_playback` | bool | true | 是否循环播放 |
-| `camera_name` | string | "video_camera" | 相机名称 |
+| `camera_name` | string | "camera" | 相机名称 |
+| `frame_id` | string | "camera_optical_frame" | 图像和 CameraInfo 的 frame_id |
 | `flip_image` | bool | false | 是否翻转图像（水平+垂直） |
 | `use_sensor_data_qos` | bool | false | 是否使用 sensor_data QoS |
 | `camera_info_url` | string | "" | 相机标定文件 URL (可选) |

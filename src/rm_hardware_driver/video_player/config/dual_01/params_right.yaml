@@ -5,6 +5,7 @@ video_player_right:
     loop_playback: true
     fps: 30.0
     camera_name: 'video_camera_right'
+    frame_id: 'video_camera_right_optical_frame'
     flip_image: false
     image_topic: 'image_raw_right'
     use_sensor_data_qos: false

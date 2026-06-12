@@ -1,86 +1,262 @@
-# Fused NN + traditional armor detector config for simulation.
+# 仿真用 NN + 传统灯条融合装甲板检测配置。
+# 说明：
+# 1) 只在这里启用/调整 armor_detector_nn 节点实际读取的参数；
+# 2) 可选值写在注释中，未列出的值一般会回退到默认分支或无效；
+# 3) 调参建议先动阈值类参数，再动 PnP/精修/融合参数。
 armor_detector:
   ros__parameters:
-    debug: true
-    target_frame: "odom"
+    # =========================
+    # 基础运行参数
+    # =========================
+    debug: true                       # 调试图像、marker、日志开关
+    debug_pose_compare: false         # 输出原始PnP与精修PnP对比，排查位姿跳变时开启
+    publish_in_target_frame: false    # true: armors直接转到target_frame；false: 保留相机观测frame
+    target_frame: "odom"              # 位姿输出目标坐标系
 
+    # =========================
+    # 推理后端
+    # 可选：
+    # - type: onnxruntime | openvino | tensorrt
+    # - device: cuda/cpu(ONNX Runtime), CPU/GPU(OpenVINO), cuda(TensorRT)
+    # - precision: fp32 | fp16 | int8
+    # 调参建议：
+    # - CUDA仿真优先 onnxruntime + cuda + fp16；
+    # - OpenVINO INT8 需要同时配置 openvino_model_xml/bin；
+    # - TensorRT 需要 engine_path 指向 .engine。
+    # =========================
     backend:
-      type: "onnxruntime"
-      device: "cuda"
-      precision: "fp16"
+      type: "onnxruntime"             # 当前仿真默认：ONNX Runtime
+      device: "cuda"                  # 无CUDA环境可改为 "cpu"
+      precision: "fp16"               # fp16速度快；数值异常时改fp32排查
       model_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
-      input_name: "images"
-      output_names: ["output"]
-      warmup_iterations: 10
-      allow_fallback: true
+      engine_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx" # TensorRT .engine路径；非TensorRT可保持占位
+      openvino_model_xml: ""          # OpenVINO .xml；不用OpenVINO时留空
+      openvino_model_bin: ""          # OpenVINO .bin；不用OpenVINO时留空
+      input_name: "images"            # ONNX输入tensor名
+      output_names: ["output"]        # 输出tensor名；多输出模型可写多个
+      warmup_iterations: 10           # 启动预热次数，减少首帧耗时尖峰
+      num_threads: 2                  # CPU推理线程数，主要影响cpu/openvino
+      use_pinned_memory: true         # CUDA页锁定内存，速度优先；内存压力大可关
+      allow_fallback: true            # 后端初始化失败时尝试fallback_type
+      fallback_type: "onnxruntime"    # 可选: onnxruntime | openvino | tensorrt
 
+    # =========================
+    # 预处理
+    # 当前代码固定按输入尺寸做letterbox语义的预处理；
+    # input_color可选: rgb | bgr，需与模型训练一致。
+    # normalize=true时使用 (pixel - mean) / std。
+    # =========================
     preprocess:
-      input_width: 640
-      input_height: 640
-      input_color: "rgb"
+      input_width: 640                # 模型输入宽
+      input_height: 640               # 模型输入高
+      input_color: "rgb"              # 模型颜色通道顺序
+      normalize: true                 # 标准YOLO/pose ONNX通常开启
+      mean: [0.0, 0.0, 0.0]           # 归一化均值
+      std: [255.0, 255.0, 255.0]      # 归一化尺度；改成[1,1,1]表示不除255
+      pad_value: 114.0                # letterbox填充值
 
+    # =========================
+    # 后处理/解码
+    # 可选：
+    # - strategy: robotpilots_landmark | ultralytics_pose
+    # - class_agnostic_nms: false(同类NMS) | true(跨类NMS)
+    # 调参建议：
+    # - 误检多：提高conf_threshold或降低nms_threshold；
+    # - 漏检多：降低conf_threshold或提高nms_threshold；
+    # - 模型角点顺序变了，优先改keypoint_remap。
+    # =========================
     postprocess:
-      strategy: "robotpilots_landmark"
-      conf_threshold: 0.7
-      nms_threshold: 0.3
-      keypoint_remap: [0, 1, 2, 3]
-      keypoint_auto_reorder: true
+      strategy: "robotpilots_landmark" # 当前0526模型使用的解码策略
+      num_classes: 14                 # label_map覆盖的类别数
+      num_keypoints: 4                # 装甲板四角点
+      keypoint_dims: 2                # 每个角点维度(x,y)
+      bbox_offset: 0                  # 输出中bbox起始通道
+      class_offset: 4                 # 输出中类别分数起始通道
+      keypoint_offset: 18             # 输出中角点起始通道
+      conf_threshold: 0.7             # 置信度阈值，越大误检越少但漏检越多
+      nms_threshold: 0.3              # NMS IoU阈值，越小重复框抑制越强
+      max_detections: 32              # 单帧最多保留目标数
+      class_agnostic_nms: false       # true会跨类别互相抑制，类别抖动严重时可试
+      keypoint_remap: [0, 1, 2, 3]    # 模型角点->标准角点顺序映射
+      keypoint_auto_reorder: true     # 角点几何自动重排，模型顺序不稳定时开启
 
     label_map:
-      path: "package://armor_detector_nn/config/label_map.yaml"
+      path: "package://armor_detector_nn/config/label_map.yaml" # class_id到颜色/数字/类型映射
 
+    # =========================
+    # 检测质量过滤
+    # 作用：按四角点几何过滤畸形框，并抑制同一目标重复检测。
+    # 调参建议：
+    # - 真实目标被过滤：放宽min_area/min_lightbar/ratio/error；
+    # - 畸形框进入PnP：收紧rectangular_error/side_ratio；
+    # - 同一装甲板重复发布：开启deduplicate并降低duplicate阈值。
+    # =========================
     quality_filter:
       enabled: true
-      min_lightbar_length_px: 4.0
-      min_area_px: 40.0
+      min_armor_ratio: 1.0            # 装甲板宽高比下限
+      max_armor_ratio: 5.0            # 装甲板宽高比上限
+      max_side_ratio: 1.5             # 左右边/上下边长度差异上限
+      max_rectangular_error_deg: 25.0 # 近似矩形角度误差上限
+      min_lightbar_length_px: 4.0     # 单侧灯条最小像素长度
+      min_area_px: 40.0               # 四角点包围面积下限
+      deduplicate_enabled: true       # 同帧重复目标抑制
+      duplicate_iou_threshold: 0.60   # bbox IoU超过该值视为重复候选
+      duplicate_keypoint_mean_dist_px: 8.0 # 四角点平均距离小于该值视为重复候选
 
-    traditional_fusion:
-      enabled: true
-      strategy: "always"
-      binary_thres: 120
-
+    # =========================
+    # PnP与位姿精修
+    # 可选：
+    # - pnp_method: ippe | iterative
+    # - refiner.mode: none | single_yaw | sliding_window
+    # 调参建议：
+    # - 单帧抖动优先调gate与single_yaw；
+    # - 连续帧平滑可试sliding_window，但会增加计算量和历史依赖。
+    # =========================
     pose:
-      pnp_method: "ippe"
-      small_armor_width: 0.133
-      small_armor_height: 0.050
-      large_armor_width: 0.225
-      large_armor_height: 0.050
+      pnp_method: "ippe"              # 平面四点推荐ippe；疑似解跳变可试iterative
+      small_armor_width: 0.133        # 小装甲板宽(m)
+      small_armor_height: 0.050       # 小装甲板高(m)
+      large_armor_width: 0.225        # 大装甲板宽(m)
+      large_armor_height: 0.050       # 大装甲板高(m)
+      force_pnp_rotate_180: false     # PnP解整体反向时的临时修正开关
 
       depth_correction:
-        enabled: true
-        min_depth_delta_m: 0.06
-        max_correction_m: 0.70
-        max_scale: 1.40
+        enabled: true                 # 用灯条像素尺度约束深度，远距跳深度时开启
+        min_depth_delta_m: 0.06       # 深度差小于该值不修正
+        blend_alpha: 0.85             # 修正融合系数，越大越相信原PnP
+        max_correction_m: 0.70        # 单次最大深度修正(m)
+        max_scale: 1.40               # 最大深度缩放比例
+        min_lightbar_length_px: 4.0   # 低于该灯条长度不做深度修正
 
       refiner:
-        mode: "single_yaw"
+        mode: "none"            # none | single_yaw | sliding_window
 
       single_yaw:
-        max_iterations: 12
-        huber_delta: 4.0
+        max_iterations: 12            # 单帧yaw优化迭代次数
+        huber_delta: 4.0              # 鲁棒核阈值，越大越相信角点
+        pitch_deg_default: 15.0       # 先验pitch角，特殊目标可调
+        roll_deg_default: 0.0         # 先验roll角
+        outpost_pitch_sign: true      # outpost pitch符号适配
+
+      sliding:
+        window_size: 8                # 滑窗帧数
+        min_frames: 4                 # 达到该帧数才启用滑窗优化
+        max_time_span_ms: 300.0       # 滑窗最大时间跨度
+        max_solver_time_ms: 2.0       # 单帧求解预算
+        max_opt_iters: 12             # 滑窗优化迭代次数
+        sigma_prior_xy: 0.08          # 位置先验噪声xy(m)
+        sigma_prior_z: 0.15           # 位置先验噪声z(m)
+        sigma_prior_yaw: 0.35         # yaw先验噪声(rad)
+        sigma_smooth_xy: 0.05         # 相邻帧xy平滑噪声
+        sigma_smooth_z: 0.10          # 相邻帧z平滑噪声
+        sigma_smooth_yaw: 0.10        # 相邻帧yaw平滑噪声
+        sigma_kp_min: 1.0             # 角点观测最小噪声(px)
+        sigma_kp_scale: 5.0           # 角点观测噪声随质量放大系数
+        huber_delta: 3.0              # 滑窗鲁棒核阈值
 
       gate:
-        max_raw_reproj_error: 4.0
-        max_reproj_error: 5.0
-        max_pose_delta_m: 0.35
-        max_yaw_delta_deg: 35.0
+        max_raw_reproj_error: 4.0     # 原始PnP重投影误差门限；0表示不限制
+        max_reproj_error: 5.0         # 精修后重投影误差门限
+        max_pose_delta_m: 0.35        # 精修前后位移差门限
+        max_yaw_delta_deg: 35.0       # 精修前后yaw差门限
+        require_finite: true          # 拒绝NaN/Inf位姿
 
+    # =========================
+    # 检测级2D Tracker
+    # 当前可选strategy: internal_iou
+    # 调参建议：
+    # - ID频繁断：增大max_center_dist_px或max_missed；
+    # - 错绑/串ID：增大iou_threshold或减小max_center_dist_px；
+    # - 新目标确认慢：减小min_hits。
+    # =========================
     tracker:
-      iou_threshold: 0.20
-      max_center_dist_px: 180
+      strategy: "internal_iou"
+      iou_threshold: 0.20             # IoU关联阈值
+      max_missed: 15                  # 连续丢失多少帧后删除track
+      min_hits: 2                     # 连续命中多少帧后确认track
+      max_center_dist_px: 180         # 关联中心距离上限(px)
 
+    # =========================
+    # 角点精修
+    # 当前method: sp25_lightbar
+    # 调参建议：
+    # - 精修后更抖：减小max_corner_shift/center_shift或提高min_refine_quality；
+    # - 精修成功率低：放宽min_bright_points/pca_stability/ratio类门限；
+    # - 帧率下降：减小max_targets_per_frame或time_budget_ms。
+    # =========================
     corner_refine:
       enabled: true
-      apply_on_confirmed_only: false
-      max_targets_per_frame: 8
-      time_budget_ms: 4.0
-      min_bright_points: 40
-      pca_stability_threshold: 0.80
-      max_corner_shift_px: 0.0
-      max_mean_corner_shift_px: 0.0
-      max_refined_center_shift_px: 0.0
-      min_refine_quality: 0.0
-      max_edge_angle_delta_deg: 35.0
-      max_area_ratio_delta: 0.65
-      max_length_ratio_delta: 0.55
-      binary_threshold: 120.0
+      method: "sp25_lightbar"
+      apply_on_confirmed_only: false  # true只精修已确认track；false首帧也精修
+      max_targets_per_frame: 8        # 单帧最多精修目标数
+      time_budget_ms: 4.0             # 单帧精修总耗时预算
+      roi_expand_ratio: 1.1           # 单灯条ROI扩大比例
+      min_bright_points: 40           # ROI内最少亮点数量
+      pca_stability_threshold: 0.80   # PCA稳定性阈值
+      max_aspect_ratio: 5.0           # 精修后装甲板最大宽高比
+      min_aspect_ratio: 1.5           # 精修后装甲板最小宽高比
+      max_corner_shift_px: 0.0        # 单角点最大移动；0表示不限制该项
+      max_mean_corner_shift_px: 0.0   # 平均角点最大移动；0表示不限制该项
+      max_refined_center_shift_px: 0.0 # 精修后中心最大移动；0表示不限制该项
+      min_refine_quality: 0.0         # 精修质量阈值；0表示不限制该项
+      preserve_perspective: true      # 保留透视形状约束
+      max_edge_angle_delta_deg: 35.0  # 边方向变化门限
+      max_area_ratio_delta: 0.65      # 面积相对变化门限
+      max_length_ratio_delta: 0.55    # 边长相对变化门限
+      full_roi_expand_ratio: 1.45     # 整体ROI扩大比例
+      binary_threshold: 120.0         # 精修二值化阈值
+      min_contour_area_px: 6.0        # 灯条轮廓最小面积
+      min_lightbar_length_px: 6.0     # 精修灯条最小长度
+      min_lightbar_ratio: 1.4         # 灯条长宽比下限
+      max_lightbar_ratio: 20.0        # 灯条长宽比上限
+      max_lightbar_angle_error_deg: 45.0 # 灯条角度误差上限
+      max_rectangular_error_deg: 0.0  # 0表示不限制矩形角误差
+      max_side_ratio: 2.2             # 对边长度比上限
+      max_lightbar_match_error_px: 26.0 # 左右灯条匹配误差上限
+      max_pair_center_shift_px: 45.0  # 灯条对中心偏移上限
+
+    # =========================
+    # 传统灯条融合
+    # 可选strategy:
+    # - fallback: NN少于min_nn_detections时才补传统检测
+    # - always: 每帧都合并传统检测候选
+    # 调参建议：
+    # - NN漏检多：strategy=always或降低min_nn_detections；
+    # - 传统误检多：提高binary_thres、收紧light/armor几何门限或关闭use_classifier=false排查。
+    # =========================
+    traditional_fusion:
+      enabled: true
+      strategy: "fallback"              # fallback | always
+      min_nn_detections: 1            # fallback模式下NN少于该数才启用传统候选
+      confidence_scale: 0.92          # 传统候选置信度缩放，避免压过NN高置信候选
+      binary_thres: 120               # 传统灯条二值化阈值
+      use_classifier: true            # 传统候选是否走数字分类器
+      classifier_threshold: 0.7       # 数字分类置信度阈值
+      ignore_classes: ["negative"]    # 传统分类器忽略类别
+      use_pca: true                   # 传统灯条角点PCA修正
+
+      light:
+        min_ratio: 0.08               # 灯条短边/长边下限
+        max_ratio: 0.4                # 灯条短边/长边上限
+        max_angle: 40.0               # 灯条倾角上限(deg)
+        color_diff_thresh: 25         # 红蓝通道差阈值
+
+      armor:
+        min_light_ratio: 0.6          # 两灯条长度比例下限
+        min_small_center_distance: 0.8 # 小装甲板灯条中心距/灯条长下限
+        max_small_center_distance: 3.2 # 小装甲板灯条中心距/灯条长上限
+        min_large_center_distance: 3.2 # 大装甲板灯条中心距/灯条长下限
+        max_large_center_distance: 5.0 # 大装甲板灯条中心距/灯条长上限
+        max_angle: 35.0               # 装甲板连线倾角上限(deg)
+
+    # =========================
+    # 运行时策略
+    # 可选：
+    # - color_filter_source: model | disabled
+    # - copy_policy: never_copy | copy_on_write_debug | always_copy
+    # =========================
+    runtime:
+      color_filter_source: "model"    # 按模型类别颜色过滤；调试跨颜色识别可改disabled
+      publish_empty: true             # 无检测时是否发布空Armors，便于下游判断在线
+      copy_policy: "copy_on_write_debug" # 调试图像拷贝策略
+      profile: true                   # 发布/记录各阶段耗时

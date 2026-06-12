@@ -5,8 +5,7 @@ Simulation bringup for the gimbal pipeline.
 
 This launch starts the auto-aim algorithm nodes for simulation. Camera drivers,
 video players, and real serial drivers are intentionally not started; their data
-must be provided by the simulator. A virtual serial node can be started to
-provide chassis/gimbal state and mode commands for the pipeline.
+must be provided by the simulator.
 """
 
 import os
@@ -15,7 +14,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -42,7 +41,6 @@ def generate_launch_description():
     sim_params = launch_params.get("sim", {})
     if not isinstance(sim_params, dict):
         sim_params = {}
-    odom2camera = launch_params.get("odom2camera", {})
 
     default_robot = str(
         sim_params.get("robot", launch_params.get("robot", "sim"))
@@ -61,14 +59,6 @@ def generate_launch_description():
     default_start_ballistic_solver = str(
         sim_params.get("start_ballistic_solver", True)
     ).lower()
-    default_use_robot_state_publisher = str(
-        sim_params.get("use_robot_state_publisher", True)
-    ).lower()
-    default_virtual_serial = str(
-        sim_params.get("virtual_serial", launch_params.get("virtual_serial", True))
-    ).lower()
-    default_camera_xyz = str(odom2camera.get("xyz", '"0.12514 0.000 0.0505 "'))
-    default_camera_rpy = str(odom2camera.get("rpy", '"0.0 0.0 -0.00"'))
 
     declare_args = [
         DeclareLaunchArgument(
@@ -110,36 +100,6 @@ def generate_launch_description():
             description="Start local ballistic_solver service.",
         ),
         DeclareLaunchArgument(
-            "use_robot_state_publisher",
-            default_value=default_use_robot_state_publisher,
-            description="Publish URDF fixed frames such as gimbal_link -> camera_link.",
-        ),
-        DeclareLaunchArgument(
-            "virtual_serial",
-            default_value=default_virtual_serial,
-            description="Start rm_serial_driver virtual_serial_node.",
-        ),
-        DeclareLaunchArgument(
-            "camera_xyz",
-            default_value=default_camera_xyz,
-            description="Camera translation argument passed to rm_gimbal.urdf.xacro.",
-        ),
-        DeclareLaunchArgument(
-            "camera_rpy",
-            default_value=default_camera_rpy,
-            description="Camera rotation argument passed to rm_gimbal.urdf.xacro.",
-        ),
-        DeclareLaunchArgument(
-            "image_topic",
-            default_value=str(sim_params.get("image_topic", "/image_raw")),
-            description="Simulator image topic consumed by armor_detector.",
-        ),
-        DeclareLaunchArgument(
-            "camera_info_topic",
-            default_value=str(sim_params.get("camera_info_topic", "/camera_info")),
-            description="Simulator camera info topic consumed by detector and gimbal pipeline.",
-        ),
-        DeclareLaunchArgument(
             "armors_topic",
             default_value=str(
                 sim_params.get("armors_topic", "/armor_detector/armors")
@@ -148,11 +108,6 @@ def generate_launch_description():
                 "Armors topic consumed by gimbal_pipeline. Published by detector "
                 "when use_detector=true, otherwise by simulator."
             ),
-        ),
-        DeclareLaunchArgument(
-            "joint_states_topic",
-            default_value=str(sim_params.get("joint_states_topic", "/joint_states")),
-            description="Simulator gimbal joint state topic consumed by gimbal_pipeline.",
         ),
         DeclareLaunchArgument(
             "cmd_gimbal_topic",
@@ -172,12 +127,6 @@ def generate_launch_description():
         detector_type = LaunchConfiguration("detector_type").perform(context).strip()
         start_ballistic_solver = _as_bool(
             LaunchConfiguration("start_ballistic_solver").perform(context)
-        )
-        use_robot_state_publisher = _as_bool(
-            LaunchConfiguration("use_robot_state_publisher").perform(context)
-        )
-        virtual_serial = _as_bool(
-            LaunchConfiguration("virtual_serial").perform(context)
         )
 
         rm_bringup_share = get_package_share_directory("rm_bringup")
@@ -227,55 +176,6 @@ def generate_launch_description():
 
         actions = []
 
-        if virtual_serial:
-            virtual_serial_params = []
-            virtual_serial_config = bringup_config_file("virtual_serial_params.yaml")
-            if virtual_serial_config:
-                virtual_serial_params.append(virtual_serial_config)
-            virtual_serial_params.append({"use_sim_time": use_sim_time})
-
-            actions.append(
-                Node(
-                    package="rm_serial_driver",
-                    executable="virtual_serial_node",
-                    name="virtual_serial",
-                    namespace=namespace,
-                    output="both",
-                    emulate_tty=True,
-                    parameters=virtual_serial_params,
-                )
-            )
-
-        if use_robot_state_publisher:
-            robot_description = Command([
-                "xacro ",
-                os.path.join(
-                    get_package_share_directory("rm_robot_description"),
-                    "urdf",
-                    "rm_gimbal.urdf.xacro",
-                ),
-                " xyz:=",
-                LaunchConfiguration("camera_xyz"),
-                " rpy:=",
-                LaunchConfiguration("camera_rpy"),
-            ])
-
-            actions.append(
-                Node(
-                    package="robot_state_publisher",
-                    executable="robot_state_publisher",
-                    namespace=namespace,
-                    output="screen",
-                    parameters=[{
-                        "robot_description": ParameterValue(
-                            robot_description, value_type=str
-                        ),
-                        "publish_frequency": 1000.0,
-                        "use_sim_time": use_sim_time,
-                    }],
-                )
-            )
-
         if use_detector:
             if detector_type == "armor_detector_nn":
                 detector_package = "armor_detector_nn"
@@ -316,8 +216,8 @@ def generate_launch_description():
                     emulate_tty=True,
                     parameters=detector_params,
                     remappings=[
-                        ("image_raw", LaunchConfiguration("image_topic")),
-                        ("camera_info", LaunchConfiguration("camera_info_topic")),
+                        ("image_raw", "/image_raw"),
+                        ("camera_info", "/camera_info"),
                         ("armor_detector/armors", LaunchConfiguration("armors_topic")),
                     ],
                 )
@@ -366,8 +266,7 @@ def generate_launch_description():
                 parameters=gimbal_pipeline_params,
                 remappings=[
                     ("/armor_detector/armors", LaunchConfiguration("armors_topic")),
-                    ("/joint_states", LaunchConfiguration("joint_states_topic")),
-                    ("camera_info", LaunchConfiguration("camera_info_topic")),
+                    ("camera_info", "/camera_info"),
                     ("cmd_gimbal", LaunchConfiguration("cmd_gimbal_topic")),
                 ],
             )

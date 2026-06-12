@@ -44,16 +44,11 @@ sim:
   debug: true
   # The custom Webots camera controller publishes ROS time from the system clock
   # and does not publish /clock. Keep simulation bringup on wall time so image
-  # stamps and the virtual_serial TF stamps are in the same time domain.
+  # stamps and simulator TF stamps are in the same time domain.
   use_sim_time: false
   use_detector: true
   start_ballistic_solver: true
-  use_robot_state_publisher: true
-  virtual_serial: false
-  image_topic: '/image_raw'
-  camera_info_topic: '/camera_info'
   armors_topic: '/armor_detector/armors'
-  joint_states_topic: '/joint_states'
   cmd_gimbal_topic: '/armor_solver/cmd_gimbal'
 
 # --------- 相机/URDF参数 ---------
