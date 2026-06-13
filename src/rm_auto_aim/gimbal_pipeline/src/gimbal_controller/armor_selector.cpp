@@ -104,6 +104,15 @@ ArmorSelectionResult ArmorSelector::selectBest(
         current_pitch);
     }
 
+    case SelectionMethod::SP_VISION_25:
+      return selectBySpVision25(
+        armor_positions,
+        target_center,
+        num_armors,
+        target_v_yaw,
+        current_yaw,
+        current_pitch);
+
     default:
       break;
   }
@@ -211,9 +220,34 @@ void ArmorSelector::setVirtualFixedId(int fixed_id)
   virtual_fixed_id_ = fixed_id;
 }
 
+void ArmorSelector::setSpVisionParameters(
+  double low_speed_vyaw,
+  double shootable_angle_deg,
+  double coming_angle_deg,
+  double leaving_angle_deg,
+  double outpost_coming_angle_deg,
+  double outpost_leaving_angle_deg,
+  bool hold_current_until_jump,
+  bool zero_speed_fallback)
+{
+  sp_low_speed_vyaw_ = std::max(low_speed_vyaw, 0.0);
+  sp_shootable_angle_deg_ = std::max(shootable_angle_deg, 0.0);
+  sp_coming_angle_deg_ = std::max(coming_angle_deg, 0.0);
+  sp_leaving_angle_deg_ = std::max(leaving_angle_deg, 0.0);
+  sp_outpost_coming_angle_deg_ = std::max(outpost_coming_angle_deg, 0.0);
+  sp_outpost_leaving_angle_deg_ = std::max(outpost_leaving_angle_deg, 0.0);
+  sp_hold_current_until_jump_ = hold_current_until_jump;
+  sp_zero_speed_fallback_ = zero_speed_fallback;
+}
+
 void ArmorSelector::resetState()
 {
   last_selected_index_ = -1;
+  sp_lock_id_ = -1;
+  sp_initial_panel_id_ = -1;
+  sp_last_front_panel_id_ = -1;
+  sp_last_armor_count_ = 0;
+  sp_has_jumped_ = false;
   virtual_mode_active_ = false;
   filtered_abs_v_yaw_ = 0.0;
   abs_v_yaw_filter_initialized_ = false;
@@ -446,6 +480,36 @@ std::vector<double> ArmorSelector::computeRadialAngles(
     double cos_theta = radial.dot(center_to_gimbal) / (radial_norm * center_to_gimbal_norm);
     cos_theta = std::max(-1.0, std::min(1.0, cos_theta));
     radial_angles.push_back(std::acos(cos_theta));
+  }
+
+  return radial_angles;
+}
+
+std::vector<double> ArmorSelector::computeSignedRadialAngles(
+  const std::vector<Eigen::Vector3d> & armor_positions,
+  const Eigen::Vector3d & target_center)
+{
+  std::vector<double> radial_angles;
+  radial_angles.reserve(armor_positions.size());
+
+  Eigen::Vector2d center_to_gimbal(-target_center.x(), -target_center.y());
+  constexpr double kEps = 1e-6;
+  if (center_to_gimbal.norm() < kEps) {
+    radial_angles.assign(armor_positions.size(), 0.0);
+    return radial_angles;
+  }
+
+  const double reference_angle = std::atan2(center_to_gimbal.y(), center_to_gimbal.x());
+
+  for (const auto & pos : armor_positions) {
+    Eigen::Vector2d radial(pos.x() - target_center.x(), pos.y() - target_center.y());
+    if (radial.norm() < kEps) {
+      radial_angles.push_back(M_PI);
+      continue;
+    }
+
+    const double radial_angle = std::atan2(radial.y(), radial.x());
+    radial_angles.push_back(angles::normalize_angle(radial_angle - reference_angle));
   }
 
   return radial_angles;
@@ -801,6 +865,181 @@ ArmorSelectionResult ArmorSelector::selectByFacingOrVirtualFixedId(
   last_selected_index_ = -1;
   return selectByVirtualFixedId(
     armor_positions, target_center, num_armors, fixed_id, current_yaw, current_pitch);
+}
+
+ArmorSelectionResult ArmorSelector::selectBySpVision25(
+  const std::vector<Eigen::Vector3d> & armor_positions,
+  const Eigen::Vector3d & target_center,
+  int num_armors,
+  double target_v_yaw,
+  double current_yaw,
+  double current_pitch)
+{
+  auto centerFallback = [&]() {
+    ArmorSelectionResult result;
+    result.position = target_center;
+    result.real_position = target_center;
+    result.is_center_fallback = true;
+    result.distance = target_center.norm();
+    result.selected_index = -1;
+    result.real_selected_index = -1;
+    return result;
+  };
+
+  if (armor_positions.empty()) {
+    resetState();
+    return centerFallback();
+  }
+
+  int armor_count = static_cast<int>(armor_positions.size());
+  if (num_armors > 0) {
+    armor_count = std::min(num_armors, armor_count);
+  }
+  if (armor_count <= 0) {
+    resetState();
+    return centerFallback();
+  }
+
+  if (sp_last_armor_count_ != armor_count) {
+    sp_lock_id_ = -1;
+    sp_initial_panel_id_ = -1;
+    sp_last_front_panel_id_ = -1;
+    sp_has_jumped_ = false;
+    sp_last_armor_count_ = armor_count;
+  }
+
+  const auto signed_radial_angles = computeSignedRadialAngles(armor_positions, target_center);
+  if (signed_radial_angles.empty()) {
+    return centerFallback();
+  }
+
+  int front_idx = 0;
+  double best_abs_delta = std::numeric_limits<double>::max();
+  for (int i = 0; i < armor_count; ++i) {
+    const double abs_delta = std::abs(signed_radial_angles[static_cast<size_t>(i)]);
+    if (abs_delta < best_abs_delta) {
+      best_abs_delta = abs_delta;
+      front_idx = i;
+    }
+  }
+
+  const double shootable_rad = sp_shootable_angle_deg_ * M_PI / 180.0;
+  if (sp_initial_panel_id_ < 0) {
+    sp_initial_panel_id_ = front_idx;
+    sp_last_front_panel_id_ = front_idx;
+  } else if (
+    front_idx != sp_last_front_panel_id_ &&
+    front_idx != sp_initial_panel_id_ &&
+    best_abs_delta <= shootable_rad)
+  {
+    sp_has_jumped_ = true;
+    sp_last_front_panel_id_ = front_idx;
+  } else {
+    sp_last_front_panel_id_ = front_idx;
+  }
+
+  auto selectIndex = [&](int idx, double facing_angle) {
+    std::vector<int> candidate{idx};
+    std::vector<double> abs_angles = signed_radial_angles;
+    for (double & angle : abs_angles) {
+      angle = std::abs(angle);
+    }
+    auto result = selectMinMovementFromIndices(
+      armor_positions, candidate, &abs_angles, current_yaw, current_pitch);
+    if (result.selected_index < 0) {
+      last_selected_index_ = -1;
+      return centerFallback();
+    }
+    result.facing_angle = facing_angle;
+    result.is_center_fallback = false;
+    result.is_virtual_target = false;
+    last_selected_index_ = result.selected_index;
+    return result;
+  };
+
+  if (
+    sp_hold_current_until_jump_ &&
+    !sp_has_jumped_ &&
+    sp_initial_panel_id_ >= 0 &&
+    sp_initial_panel_id_ < armor_count)
+  {
+    const double facing_angle = std::abs(signed_radial_angles[sp_initial_panel_id_]);
+    return selectIndex(sp_initial_panel_id_, facing_angle);
+  }
+
+  const bool is_outpost_like = (armor_count == 3);
+  const bool low_speed = !is_outpost_like && std::abs(target_v_yaw) <= sp_low_speed_vyaw_;
+
+  if (low_speed) {
+    std::vector<int> shootable_indices;
+    shootable_indices.reserve(static_cast<size_t>(armor_count));
+    for (int i = 0; i < armor_count; ++i) {
+      if (std::abs(signed_radial_angles[static_cast<size_t>(i)]) <= shootable_rad) {
+        shootable_indices.push_back(i);
+      }
+    }
+
+    if (shootable_indices.empty()) {
+      sp_lock_id_ = -1;
+      last_selected_index_ = -1;
+      return centerFallback();
+    }
+
+    if (shootable_indices.size() > 1) {
+      const bool lock_still_valid =
+        std::find(shootable_indices.begin(), shootable_indices.end(), sp_lock_id_) !=
+        shootable_indices.end();
+
+      if (!lock_still_valid) {
+        sp_lock_id_ = *std::min_element(
+          shootable_indices.begin(),
+          shootable_indices.end(),
+          [&](int lhs, int rhs) {
+            return std::abs(signed_radial_angles[static_cast<size_t>(lhs)]) <
+                   std::abs(signed_radial_angles[static_cast<size_t>(rhs)]);
+          });
+      }
+
+      const double facing_angle = std::abs(signed_radial_angles[sp_lock_id_]);
+      return selectIndex(sp_lock_id_, facing_angle);
+    }
+
+    sp_lock_id_ = -1;
+    const int selected_idx = shootable_indices.front();
+    const double facing_angle = std::abs(signed_radial_angles[selected_idx]);
+    return selectIndex(selected_idx, facing_angle);
+  }
+
+  sp_lock_id_ = -1;
+  const double coming_angle =
+    (is_outpost_like ? sp_outpost_coming_angle_deg_ : sp_coming_angle_deg_) * M_PI / 180.0;
+  const double leaving_angle =
+    (is_outpost_like ? sp_outpost_leaving_angle_deg_ : sp_leaving_angle_deg_) * M_PI / 180.0;
+
+  if (std::abs(target_v_yaw) < 1e-6) {
+    if (sp_zero_speed_fallback_) {
+      return selectIndex(front_idx, best_abs_delta);
+    }
+    last_selected_index_ = -1;
+    return centerFallback();
+  }
+
+  for (int i = 0; i < armor_count; ++i) {
+    const double delta = signed_radial_angles[static_cast<size_t>(i)];
+    if (std::abs(delta) > coming_angle) {
+      continue;
+    }
+
+    if (target_v_yaw > 0.0 && delta < leaving_angle) {
+      return selectIndex(i, std::abs(delta));
+    }
+    if (target_v_yaw < 0.0 && delta > -leaving_angle) {
+      return selectIndex(i, std::abs(delta));
+    }
+  }
+
+  last_selected_index_ = -1;
+  return centerFallback();
 }
 
 ArmorSelectionResult ArmorSelector::selectByVirtualPose(

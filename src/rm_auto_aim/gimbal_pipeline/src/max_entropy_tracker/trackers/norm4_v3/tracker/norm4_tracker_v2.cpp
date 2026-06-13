@@ -248,7 +248,10 @@ Eigen::Vector3d Norm4ArmorTrackerV2::get_center_position() const {
 }
 
 double Norm4ArmorTrackerV2::get_yaw() const {
-  return backend_->spin_filter().get_yaw();
+  // Published TrackedRobot uses the shared armors_offset convention where
+  // armor 0 is at local (-r, 0). Shift the internal center yaw by pi so
+  // downstream projection reconstructs armor positions consistently.
+  return normalize_angle(backend_->spin_filter().get_yaw() + M_PI);
 }
 
 std::pair<double, double> Norm4ArmorTrackerV2::get_radii() const {

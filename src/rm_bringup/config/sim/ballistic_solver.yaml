@@ -11,7 +11,7 @@ ballistic_solver:
     # 根据枪管类型和子弹类型调整
     # - 17mm 子弹: 约 15-30 m/s
     # - 42mm 子弹: 约 10-16 m/s
-    bullet_speed: 20.0
+    bullet_speed: 22.5
     
     # 重力加速度 (m/s^2)
     gravity: 9.8
@@ -40,4 +40,4 @@ ballistic_solver:
     # 弹道补偿器类型
     # - "ideal": 理想模型,不考虑空气阻力 (计算更快)
     # - "resistance": 考虑空气阻力 (更精确)
-    compensator_type: "resistance"
+    compensator_type: "ideal"

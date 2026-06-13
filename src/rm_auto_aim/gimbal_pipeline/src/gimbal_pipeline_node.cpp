@@ -505,6 +505,22 @@ GimbalPipelineNode::GimbalPipelineNode(const rclcpp::NodeOptions &options)
   int virtual_auto_switch_fixed_id =
     get_parameter("controller.solver.virtual_pose.auto_switch.fixed_id").as_int();
   int virtual_fixed_id = get_parameter("controller.solver.virtual_pose.fixed_id").as_int();
+  double sp_vision_low_speed_vyaw =
+    get_parameter("controller.solver.sp_vision.low_speed_vyaw").as_double();
+  double sp_vision_shootable_angle_deg =
+    get_parameter("controller.solver.sp_vision.shootable_angle_deg").as_double();
+  double sp_vision_coming_angle_deg =
+    get_parameter("controller.solver.sp_vision.coming_angle_deg").as_double();
+  double sp_vision_leaving_angle_deg =
+    get_parameter("controller.solver.sp_vision.leaving_angle_deg").as_double();
+  double sp_vision_outpost_coming_angle_deg =
+    get_parameter("controller.solver.sp_vision.outpost_coming_angle_deg").as_double();
+  double sp_vision_outpost_leaving_angle_deg =
+    get_parameter("controller.solver.sp_vision.outpost_leaving_angle_deg").as_double();
+  bool sp_vision_hold_current_until_jump =
+    get_parameter("controller.solver.sp_vision.hold_current_until_jump").as_bool();
+  bool sp_vision_zero_speed_fallback =
+    get_parameter("controller.solver.sp_vision.zero_speed_fallback").as_bool();
   double controller_delay = readUnifiedDoubleParameter(
     *this,
     "controller.delay.control_latency_s",
@@ -669,6 +685,15 @@ GimbalPipelineNode::GimbalPipelineNode(const rclcpp::NodeOptions &options)
   armor_selector_->setVirtualAutoSwitchMethod(auto_switch_method);
   armor_selector_->setVirtualAutoSwitchFixedId(virtual_auto_switch_fixed_id);
   armor_selector_->setVirtualFixedId(virtual_fixed_id);
+  armor_selector_->setSpVisionParameters(
+    sp_vision_low_speed_vyaw,
+    sp_vision_shootable_angle_deg,
+    sp_vision_coming_angle_deg,
+    sp_vision_leaving_angle_deg,
+    sp_vision_outpost_coming_angle_deg,
+    sp_vision_outpost_leaving_angle_deg,
+    sp_vision_hold_current_until_jump,
+    sp_vision_zero_speed_fallback);
 
   // 配置选板策略
   gimbal_controller::ArmorSelector::SelectionMethod sel_method =
@@ -687,6 +712,8 @@ GimbalPipelineNode::GimbalPipelineNode(const rclcpp::NodeOptions &options)
     sel_method = gimbal_controller::ArmorSelector::SelectionMethod::FACING_OR_VIRTUAL_POSE;
   } else if (selection_method_str == "facing_or_virtual_fixed_id") {
     sel_method = gimbal_controller::ArmorSelector::SelectionMethod::FACING_OR_VIRTUAL_FIXED_ID;
+  } else if (selection_method_str == "sp_vision_25" || selection_method_str == "sp_vision") {
+    sel_method = gimbal_controller::ArmorSelector::SelectionMethod::SP_VISION_25;
   }
   armor_selector_->setSelectionMethod(sel_method);
   radial_selection_enabled_ =
@@ -1719,6 +1746,14 @@ void GimbalPipelineNode::declareGimbalControllerParameters() {
                     std::string("virtual_pose"));
   declare_parameter("controller.solver.virtual_pose.auto_switch.fixed_id", 0);
   declare_parameter("controller.solver.virtual_pose.fixed_id", 0);
+  declare_parameter("controller.solver.sp_vision.low_speed_vyaw", 2.0);
+  declare_parameter("controller.solver.sp_vision.shootable_angle_deg", 60.0);
+  declare_parameter("controller.solver.sp_vision.coming_angle_deg", 60.0);
+  declare_parameter("controller.solver.sp_vision.leaving_angle_deg", 20.0);
+  declare_parameter("controller.solver.sp_vision.outpost_coming_angle_deg", 70.0);
+  declare_parameter("controller.solver.sp_vision.outpost_leaving_angle_deg", 30.0);
+  declare_parameter("controller.solver.sp_vision.hold_current_until_jump", false);
+  declare_parameter("controller.solver.sp_vision.zero_speed_fallback", true);
   declare_parameter("controller.solver.controller_delay", 0.0);
   declare_parameter("controller.solver.trigger_to_muzzle_s", 0.0);
   declare_parameter("controller.solver.selection_method", std::string("min_movement_with_facing"));

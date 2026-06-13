@@ -63,6 +63,7 @@ public:
    *  - VIRTUAL_FIXED_ID         : 固定 ID 虚拟装甲板（仅生成指定 ID 的虚拟板）
    *  - FACING_OR_VIRTUAL_POSE   : 可打真实板优先，否则退回虚拟姿态
    *  - FACING_OR_VIRTUAL_FIXED_ID : 指定 ID 可打优先，否则退回该 ID 的虚拟姿态
+   *  - SP_VISION_25           : 参考 sp_vision_25 Aimer::choose_aim_point 的来/离角选板
    */
   enum class SelectionMethod
   {
@@ -74,6 +75,7 @@ public:
     VIRTUAL_FIXED_ID         = 5,
     FACING_OR_VIRTUAL_POSE   = 6,
     FACING_OR_VIRTUAL_FIXED_ID = 7,
+    SP_VISION_25             = 8,
   };
 
   ArmorSelector() = default;
@@ -165,6 +167,27 @@ public:
    * @param fixed_id 指定的装甲板索引 ID
    */
   void setVirtualFixedId(int fixed_id);
+
+  /**
+   * @brief 设置 sp_vision_25 风格选板参数
+   * @param low_speed_vyaw 低速/非小陀螺角速度阈值(rad/s)
+   * @param shootable_angle_deg 低速时可射击角范围(度)
+   * @param coming_angle_deg 小陀螺来板角(度)
+   * @param leaving_angle_deg 小陀螺离板角(度)
+   * @param outpost_coming_angle_deg 前哨站来板角(度)
+   * @param outpost_leaving_angle_deg 前哨站离板角(度)
+   * @param hold_current_until_jump 是否在检测到正面板索引跳变前保持初始板
+   * @param zero_speed_fallback 高速/前哨站分支角速度近零时是否回退到最正对板
+   */
+  void setSpVisionParameters(
+    double low_speed_vyaw,
+    double shootable_angle_deg,
+    double coming_angle_deg,
+    double leaving_angle_deg,
+    double outpost_coming_angle_deg,
+    double outpost_leaving_angle_deg,
+    bool hold_current_until_jump,
+    bool zero_speed_fallback);
 
   /**
    * @brief 重置内部记忆状态 (目标丢失时调用)
@@ -284,6 +307,21 @@ public:
     double current_pitch);
 
   /**
+   * @brief sp_vision_25 Aimer::choose_aim_point 风格选板
+   *
+   * 使用 (中心->云台原点) 与 (中心->装甲板) 的有符号水平夹角作为 delta_angle:
+   * 低速普通目标在 shootable_angle 范围内选板并锁定双候选；高速/前哨站使用
+   * coming/leaving 角和 yaw_velocity 方向选择转入视野的装甲板。
+   */
+  ArmorSelectionResult selectBySpVision25(
+    const std::vector<Eigen::Vector3d> & armor_positions,
+    const Eigen::Vector3d & target_center,
+    int num_armors,
+    double target_v_yaw,
+    double current_yaw,
+    double current_pitch);
+
+  /**
    * @brief 选择最佳装甲板 (基于传统决策角)
    * @param armor_positions 各装甲板的世界坐标位置
    * @param target_center 目标中心位置
@@ -355,6 +393,10 @@ public:
     const Eigen::Vector3d & target_center,
     double centerline_bias_rad = 0.0);
 
+  static std::vector<double> computeSignedRadialAngles(
+    const std::vector<Eigen::Vector3d> & armor_positions,
+    const Eigen::Vector3d & target_center);
+
   ArmorSelectionResult selectMinMovementFromIndices(
     const std::vector<Eigen::Vector3d> & armor_positions,
     const std::vector<int> & candidate_indices,
@@ -386,11 +428,28 @@ private:
   SelectionMethod virtual_auto_switch_method_{SelectionMethod::VIRTUAL_POSE};
   int virtual_auto_switch_fixed_id_{0};
 
+  // sp_vision_25 选板参数
+  double sp_low_speed_vyaw_{2.0};
+  double sp_shootable_angle_deg_{60.0};
+  double sp_coming_angle_deg_{60.0};
+  double sp_leaving_angle_deg_{20.0};
+  double sp_outpost_coming_angle_deg_{70.0};
+  double sp_outpost_leaving_angle_deg_{30.0};
+  bool sp_hold_current_until_jump_{false};
+  bool sp_zero_speed_fallback_{true};
+
   // 选板策略
   SelectionMethod selection_method_{SelectionMethod::MIN_MOVEMENT_WITH_FACING};
 
   // 记忆上次选择 (用于 hysteresis)
   mutable int last_selected_index_{-1};
+
+  // sp_vision_25 风格锁定状态
+  int sp_lock_id_{-1};
+  int sp_initial_panel_id_{-1};
+  int sp_last_front_panel_id_{-1};
+  int sp_last_armor_count_{0};
+  bool sp_has_jumped_{false};
 
   // 自动虚拟模式启停状态
   bool virtual_mode_active_{false};

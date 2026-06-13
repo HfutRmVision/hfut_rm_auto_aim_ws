@@ -73,8 +73,8 @@ armor_detector:
       bbox_offset: 0                  # 输出中bbox起始通道
       class_offset: 4                 # 输出中类别分数起始通道
       keypoint_offset: 18             # 输出中角点起始通道
-      conf_threshold: 0.7             # 置信度阈值，越大误检越少但漏检越多
-      nms_threshold: 0.3              # NMS IoU阈值，越小重复框抑制越强
+      conf_threshold: 0.75            # 置信度阈值，越大误检越少但漏检越多
+      nms_threshold: 0.25              # NMS IoU阈值，越小重复框抑制越强
       max_detections: 32              # 单帧最多保留目标数
       class_agnostic_nms: false       # true会跨类别互相抑制，类别抖动严重时可试
       keypoint_remap: [0, 1, 2, 3]    # 模型角点->标准角点顺序映射
@@ -93,14 +93,14 @@ armor_detector:
     # =========================
     quality_filter:
       enabled: true
-      min_armor_ratio: 1.0            # 装甲板宽高比下限
-      max_armor_ratio: 5.0            # 装甲板宽高比上限
-      max_side_ratio: 1.5             # 左右边/上下边长度差异上限
-      max_rectangular_error_deg: 25.0 # 近似矩形角度误差上限
-      min_lightbar_length_px: 4.0     # 单侧灯条最小像素长度
-      min_area_px: 40.0               # 四角点包围面积下限
+      min_armor_ratio: 1.2            # 装甲板宽高比下限
+      max_armor_ratio: 4.2            # 装甲板宽高比上限
+      max_side_ratio: 1.12             # 左右边/上下边长度差异上限
+      max_rectangular_error_deg: 8.0 # 近似矩形角度误差上限
+      min_lightbar_length_px: 10.0     # 单侧灯条最小像素长度
+      min_area_px: 120.0               # 四角点包围面积下限
       deduplicate_enabled: true       # 同帧重复目标抑制
-      duplicate_iou_threshold: 0.60   # bbox IoU超过该值视为重复候选
+      duplicate_iou_threshold: 0.50   # bbox IoU超过该值视为重复候选
       duplicate_keypoint_mean_dist_px: 8.0 # 四角点平均距离小于该值视为重复候选
 
     # =========================
@@ -114,8 +114,8 @@ armor_detector:
     # =========================
     pose:
       pnp_method: "ippe"              # 平面四点推荐ippe；疑似解跳变可试iterative
-      small_armor_width: 0.133        # 小装甲板宽(m)
-      small_armor_height: 0.050       # 小装甲板高(m)
+      small_armor_width: 0.135        # 小装甲板宽(m)
+      small_armor_height: 0.055       # 小装甲板高(m)
       large_armor_width: 0.225        # 大装甲板宽(m)
       large_armor_height: 0.050       # 大装甲板高(m)
       force_pnp_rotate_180: false     # PnP解整体反向时的临时修正开关
@@ -129,7 +129,7 @@ armor_detector:
         min_lightbar_length_px: 4.0   # 低于该灯条长度不做深度修正
 
       refiner:
-        mode: "none"            # none | single_yaw | sliding_window
+        mode: "sliding_window"        # none | single_yaw | sliding_window；短窗口抑制单帧抖动并控制滞后
 
       single_yaw:
         max_iterations: 12            # 单帧yaw优化迭代次数
@@ -139,26 +139,26 @@ armor_detector:
         outpost_pitch_sign: true      # outpost pitch符号适配
 
       sliding:
-        window_size: 8                # 滑窗帧数
-        min_frames: 4                 # 达到该帧数才启用滑窗优化
-        max_time_span_ms: 300.0       # 滑窗最大时间跨度
+        window_size: 3                # 滑窗帧数；短窗口降低运动目标历史滞后
+        min_frames: 2                 # 达到该帧数才启用滑窗优化
+        max_time_span_ms: 120.0       # 滑窗最大时间跨度
         max_solver_time_ms: 2.0       # 单帧求解预算
         max_opt_iters: 12             # 滑窗优化迭代次数
         sigma_prior_xy: 0.08          # 位置先验噪声xy(m)
         sigma_prior_z: 0.15           # 位置先验噪声z(m)
         sigma_prior_yaw: 0.35         # yaw先验噪声(rad)
-        sigma_smooth_xy: 0.05         # 相邻帧xy平滑噪声
-        sigma_smooth_z: 0.10          # 相邻帧z平滑噪声
-        sigma_smooth_yaw: 0.10        # 相邻帧yaw平滑噪声
+        sigma_smooth_xy: 0.08         # 相邻帧xy平滑噪声
+        sigma_smooth_z: 0.14          # 相邻帧z平滑噪声
+        sigma_smooth_yaw: 0.18        # 相邻帧yaw平滑噪声
         sigma_kp_min: 1.0             # 角点观测最小噪声(px)
         sigma_kp_scale: 5.0           # 角点观测噪声随质量放大系数
         huber_delta: 3.0              # 滑窗鲁棒核阈值
 
       gate:
-        max_raw_reproj_error: 4.0     # 原始PnP重投影误差门限；0表示不限制
-        max_reproj_error: 5.0         # 精修后重投影误差门限
-        max_pose_delta_m: 0.35        # 精修前后位移差门限
-        max_yaw_delta_deg: 35.0       # 精修前后yaw差门限
+        max_raw_reproj_error: 1.2     # 原始PnP重投影误差门限；0表示不限制
+        max_reproj_error: 2.2         # 精修后重投影误差门限
+        max_pose_delta_m: 0.16        # 精修前后位移差门限
+        max_yaw_delta_deg: 18.0       # 精修前后yaw差门限
         require_finite: true          # 拒绝NaN/Inf位姿
 
     # =========================
@@ -187,33 +187,33 @@ armor_detector:
     corner_refine:
       enabled: true
       method: "sp25_lightbar"
-      apply_on_confirmed_only: false  # true只精修已确认track；false首帧也精修
-      max_targets_per_frame: 8        # 单帧最多精修目标数
-      time_budget_ms: 4.0             # 单帧精修总耗时预算
+      apply_on_confirmed_only: true  # true只精修已确认track；false首帧也精修
+      max_targets_per_frame: 2        # 单帧最多精修目标数；双板可见时两块都精修
+      time_budget_ms: 3.5             # 单帧精修总耗时预算
       roi_expand_ratio: 1.1           # 单灯条ROI扩大比例
-      min_bright_points: 40           # ROI内最少亮点数量
-      pca_stability_threshold: 0.80   # PCA稳定性阈值
+      min_bright_points: 50           # ROI内最少亮点数量
+      pca_stability_threshold: 0.85   # PCA稳定性阈值
       max_aspect_ratio: 5.0           # 精修后装甲板最大宽高比
       min_aspect_ratio: 1.5           # 精修后装甲板最小宽高比
-      max_corner_shift_px: 0.0        # 单角点最大移动；0表示不限制该项
-      max_mean_corner_shift_px: 0.0   # 平均角点最大移动；0表示不限制该项
-      max_refined_center_shift_px: 0.0 # 精修后中心最大移动；0表示不限制该项
-      min_refine_quality: 0.0         # 精修质量阈值；0表示不限制该项
+      max_corner_shift_px: 4.0        # 单角点最大移动；0表示不限制该项
+      max_mean_corner_shift_px: 1.8   # 平均角点最大移动；0表示不限制该项
+      max_refined_center_shift_px: 1.8 # 精修后中心最大移动；0表示不限制该项
+      min_refine_quality: 0.88         # 精修质量阈值；0表示不限制该项
       preserve_perspective: true      # 保留透视形状约束
-      max_edge_angle_delta_deg: 35.0  # 边方向变化门限
-      max_area_ratio_delta: 0.65      # 面积相对变化门限
-      max_length_ratio_delta: 0.55    # 边长相对变化门限
+      max_edge_angle_delta_deg: 12.0  # 边方向变化门限
+      max_area_ratio_delta: 0.12      # 面积相对变化门限
+      max_length_ratio_delta: 0.18    # 边长相对变化门限
       full_roi_expand_ratio: 1.45     # 整体ROI扩大比例
       binary_threshold: 120.0         # 精修二值化阈值
-      min_contour_area_px: 6.0        # 灯条轮廓最小面积
+      min_contour_area_px: 8.0        # 灯条轮廓最小面积
       min_lightbar_length_px: 6.0     # 精修灯条最小长度
       min_lightbar_ratio: 1.4         # 灯条长宽比下限
       max_lightbar_ratio: 20.0        # 灯条长宽比上限
-      max_lightbar_angle_error_deg: 45.0 # 灯条角度误差上限
+      max_lightbar_angle_error_deg: 40.0 # 灯条角度误差上限
       max_rectangular_error_deg: 0.0  # 0表示不限制矩形角误差
-      max_side_ratio: 2.2             # 对边长度比上限
-      max_lightbar_match_error_px: 26.0 # 左右灯条匹配误差上限
-      max_pair_center_shift_px: 45.0  # 灯条对中心偏移上限
+      max_side_ratio: 1.8             # 对边长度比上限
+      max_lightbar_match_error_px: 18.0 # 左右灯条匹配误差上限
+      max_pair_center_shift_px: 30.0  # 灯条对中心偏移上限
 
     # =========================
     # 传统灯条融合
@@ -226,9 +226,9 @@ armor_detector:
     # =========================
     traditional_fusion:
       enabled: true
-      strategy: "fallback"              # fallback | always
+      strategy: "fallback"            # fallback | always；NN有稳定输出时不混入传统候选噪声
       min_nn_detections: 1            # fallback模式下NN少于该数才启用传统候选
-      confidence_scale: 0.92          # 传统候选置信度缩放，避免压过NN高置信候选
+      confidence_scale: 1.05          # 传统候选置信度缩放，避免压过NN高置信候选
       binary_thres: 120               # 传统灯条二值化阈值
       use_classifier: true            # 传统候选是否走数字分类器
       classifier_threshold: 0.7       # 数字分类置信度阈值
@@ -242,12 +242,12 @@ armor_detector:
         color_diff_thresh: 25         # 红蓝通道差阈值
 
       armor:
-        min_light_ratio: 0.6          # 两灯条长度比例下限
+        min_light_ratio: 0.8          # 两灯条长度比例下限
         min_small_center_distance: 0.8 # 小装甲板灯条中心距/灯条长下限
-        max_small_center_distance: 3.2 # 小装甲板灯条中心距/灯条长上限
-        min_large_center_distance: 3.2 # 大装甲板灯条中心距/灯条长下限
-        max_large_center_distance: 5.0 # 大装甲板灯条中心距/灯条长上限
-        max_angle: 35.0               # 装甲板连线倾角上限(deg)
+        max_small_center_distance: 3.5 # 小装甲板灯条中心距/灯条长上限
+        min_large_center_distance: 3.5 # 大装甲板灯条中心距/灯条长下限
+        max_large_center_distance: 8.0 # 大装甲板灯条中心距/灯条长上限
+        max_angle: 45.0               # 装甲板连线倾角上限(deg)
 
     # =========================
     # 运行时策略

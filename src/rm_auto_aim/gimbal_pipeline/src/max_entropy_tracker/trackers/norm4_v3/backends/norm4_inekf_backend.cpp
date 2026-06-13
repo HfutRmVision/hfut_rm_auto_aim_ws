@@ -199,7 +199,8 @@ Eigen::Vector4d InvariantPoseBackend::obs_model_single(
   }
   double center_yaw = normalize_angle(x(idx.DELTA()));
 
-  // Group action: p_armor = p + R(center_yaw) · b(θ, panel)
+  // Observation yaw is detector yaw plus pi; in this internal convention the
+  // observed armor is on the positive radial direction from the estimated center.
   const double armor_yaw = normalize_angle(center_yaw + pp.phase_offset);
   const double x_obs = x_c + radius * std::cos(armor_yaw);
   const double y_obs = y_c + radius * std::sin(armor_yaw);
