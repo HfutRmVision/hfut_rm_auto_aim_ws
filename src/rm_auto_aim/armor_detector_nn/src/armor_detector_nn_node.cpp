@@ -724,18 +724,16 @@ void ArmorDetectorNNNode::imageCallback(
     extract_rotation(target_to_camera);
   } catch (tf2::ExtrapolationException &ex) {
     FYT_WARN("armor_detector",
-             "TF at image stamp not cached, fallback to latest: {}", ex.what());
-    try {
-      auto target_to_camera = tf2_buffer_->lookupTransform(
-          config_.target_frame, img_msg->header.frame_id, tf2::TimePointZero);
-      have_target_to_camera_tf = true;
-      extract_rotation(target_to_camera);
-    } catch (tf2::TransformException &ex2) {
-      FYT_ERROR("armor_detector", "Fallback transform error: {}", ex2.what());
-      return;
+             "TF at image stamp not cached, dropping frame: {}", ex.what());
+    if (config_.runtime.publish_empty) {
+      publishEmptyArmors(img_msg->header);
     }
+    return;
   } catch (tf2::TransformException &ex) {
     FYT_ERROR("armor_detector", "Transform error: {}", ex.what());
+    if (config_.runtime.publish_empty) {
+      publishEmptyArmors(img_msg->header);
+    }
     return;
   }
 

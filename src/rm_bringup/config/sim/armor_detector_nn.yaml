@@ -129,7 +129,7 @@ armor_detector:
         min_lightbar_length_px: 4.0   # 低于该灯条长度不做深度修正
 
       refiner:
-        mode: "single_yaw"            # none | single_yaw | sliding_window；云台运动时相机系滑窗会放大假运动
+        mode: "single_yaw"                  # none | single_yaw | sliding_window；当前仿真raw PnP更稳，避免精修引入云台相关抖动
 
       single_yaw:
         max_iterations: 12            # 单帧yaw优化迭代次数

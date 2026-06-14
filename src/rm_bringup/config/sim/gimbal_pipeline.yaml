@@ -73,8 +73,8 @@ gimbal_pipeline:
     spin:
       spin_process_noise_yaw_rate: 10.5   # yaw角速度过程噪声
       spin_process_noise_yaw_acc: 10.0   # yaw角加速度过程噪声
-      spin_process_noise_delta_rate: 3.80 # 面间相位变化速度噪声
-      spin_process_noise_delta_acc: 45.0  # 面间相位变化加速度噪声
+      spin_process_noise_delta_rate: 1.50 # 面间相位变化速度噪声
+      spin_process_noise_delta_acc: 14.0  # 面间相位变化加速度噪声
 
     entropy:
       temperature: 2.0      # softmax温度: 大=更平均更稳，小=更激进更敏感
@@ -246,8 +246,8 @@ gimbal_pipeline:
         singer_sigma: 1.8
         process_noise_r: 0.0008
         process_noise_dz: 0.00005
-        spin_process_noise_delta_rate: 3.8
-        spin_process_noise_delta_acc: 45.0
+        spin_process_noise_delta_rate: 1.5
+        spin_process_noise_delta_acc: 14.0
       phase_memory:
         enable_phase_memory: true
         enable_kinematic_anti_pingpong: true
@@ -325,7 +325,7 @@ gimbal_pipeline:
         dual_raw_batch: true
         sigma_pos_xy: 0.075
         sigma_pos_z: 0.10
-        sigma_yaw: 0.25
+        sigma_yaw: 0.35
         dual_raw_R_scale: 1.8
         gate:
           single_total_nis: 30.0
@@ -446,6 +446,10 @@ gimbal_pipeline:
       vel_min_cutoff: 0.7
       vel_beta: 0.04
       vel_d_cutoff: 1.0
+      yaw_vel_min_cutoff: 0.25
+      yaw_vel_beta: 0.015
+      yaw_vel_d_cutoff: 1.0
+      yaw_vel_deadband: 0.06
       # RM 参数：initial_step大=收敛快但波动大，gamma大=后期更新更慢
       rm_initial_step: 0.2
       rm_gamma: 0.75
@@ -809,13 +813,13 @@ gimbal_pipeline:
         control_delay_s: 0.000
         max_accel: 24.0
         q_yaw: 1000.0
-        q_pitch: 300.0
+        q_pitch: 260.0
         q_yaw_vel: 2.4
-        q_pitch_vel: 2.6
+        q_pitch_vel: 3.4
         r_yaw: 0.001
-        r_pitch: 0.0008
+        r_pitch: 0.0010
         s_yaw: 0.045
-        s_pitch: 0.050
+        s_pitch: 0.070
         enable_delay_compensation: true
         prediction_delay_s: 0.000
         flight_time_iters: 2
@@ -918,7 +922,7 @@ gimbal_pipeline:
         max_outlier_count: 3
         enable_rate_limiter: true
         max_yaw_rate: 5.0
-        max_pitch_rate: 7.0
+        max_pitch_rate: 6.0
         enable_moving_average: false
         moving_average_window_size: 3
         enable_ema: false

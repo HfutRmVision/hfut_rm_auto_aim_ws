@@ -200,15 +200,8 @@ void ArmorDetectorNode::processImage(
     extract_rotation(odom_to_gimbal);
   } catch (tf2::ExtrapolationException &ex) {
     FYT_WARN("armor_detector",
-             "TF at image stamp not cached, falling back to latest: {}", ex.what());
-    try {
-      auto odom_to_gimbal = tf2_buffer_->lookupTransform(
-          odom_frame_, img_msg->header.frame_id, tf2::TimePointZero);
-      extract_rotation(odom_to_gimbal);
-    } catch (tf2::TransformException &ex2) {
-      FYT_ERROR("armor_detector", "Fallback transform error: {}", ex2.what());
-      return;
-    }
+             "TF at image stamp not cached, dropping frame: {}", ex.what());
+    return;
   } catch (tf2::TransformException &ex) {
     FYT_ERROR("armor_detector", "Transform error: {}", ex.what());
     return;

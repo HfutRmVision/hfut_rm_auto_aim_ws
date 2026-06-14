@@ -1680,6 +1680,10 @@ void GimbalPipelineNode::declareTrackerParameters() {
   declare_parameter("smoother.vel_min_cutoff", 2.0);
   declare_parameter("smoother.vel_beta", 0.01);
   declare_parameter("smoother.vel_d_cutoff", 1.0);
+  declare_parameter("smoother.yaw_vel_min_cutoff", 0.5);
+  declare_parameter("smoother.yaw_vel_beta", 0.02);
+  declare_parameter("smoother.yaw_vel_d_cutoff", 1.0);
+  declare_parameter("smoother.yaw_vel_deadband", 0.0);
   declare_parameter("smoother.rm_initial_step", 0.5);
   declare_parameter("smoother.rm_gamma", 0.75);
   declare_parameter("smoother.rm_n0", 5);
@@ -3149,6 +3153,14 @@ void GimbalPipelineNode::applyTrackerParamsToConfig() {
   smoother_config_.vel_beta = get_parameter("smoother.vel_beta").as_double();
   smoother_config_.vel_d_cutoff =
       get_parameter("smoother.vel_d_cutoff").as_double();
+  smoother_config_.yaw_vel_min_cutoff =
+      get_parameter("smoother.yaw_vel_min_cutoff").as_double();
+  smoother_config_.yaw_vel_beta =
+      get_parameter("smoother.yaw_vel_beta").as_double();
+  smoother_config_.yaw_vel_d_cutoff =
+      get_parameter("smoother.yaw_vel_d_cutoff").as_double();
+  smoother_config_.yaw_vel_deadband =
+      get_parameter("smoother.yaw_vel_deadband").as_double();
   smoother_config_.rm_initial_step =
       get_parameter("smoother.rm_initial_step").as_double();
   smoother_config_.rm_gamma = get_parameter("smoother.rm_gamma").as_double();
