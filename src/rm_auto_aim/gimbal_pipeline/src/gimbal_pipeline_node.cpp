@@ -866,6 +866,8 @@ GimbalPipelineNode::GimbalPipelineNode(const rclcpp::NodeOptions &options)
     fire_cfg.control_latency_s = std::max(controller_delay, 0.0);
     fire_cfg.trigger_to_muzzle_s = std::max(trigger_to_muzzle_s, 0.0);
     fire_cfg.max_processing_delay_s = std::max(max_processing_delay_s, 0.0);
+    fire_cfg.yaw_offset_rad = yaw_offset * M_PI / 180.0;
+    fire_cfg.pitch_offset_rad = pitch_offset * M_PI / 180.0;
     fire_cfg.include_processing_delay = true;
     fire_cfg.include_control_latency_in_target_prediction = false;
     gimbal_control_core_->setFireDecisionConfig(fire_cfg);
@@ -3823,6 +3825,9 @@ void GimbalPipelineNode::initGimbalStrategies() {
     mpc_max_processing_delay_s);
   mpc_s->setYawFeedforward(
     get_parameter("controller.mpc.yaw_feedforward_k_s").as_double());
+  mpc_s->setManualOffset(
+    get_parameter("controller.solver.pitch_offset").as_double(),
+    get_parameter("controller.solver.yaw_offset").as_double());
   mpc_s->setManeuverAdaptParameters(
     get_parameter("controller.mpc.maneuver_adapt.enable").as_bool(),
     get_parameter("controller.mpc.maneuver_adapt.a_max").as_double(),

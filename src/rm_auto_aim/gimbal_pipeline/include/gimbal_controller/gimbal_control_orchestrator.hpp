@@ -36,6 +36,8 @@ struct FireDecisionConfig
   double control_latency_s{0.0};
   double trigger_to_muzzle_s{0.0};
   double max_processing_delay_s{0.5};
+  double yaw_offset_rad{0.0};
+  double pitch_offset_rad{0.0};
   bool include_processing_delay{true};
   bool include_control_latency_in_target_prediction{false};
 };

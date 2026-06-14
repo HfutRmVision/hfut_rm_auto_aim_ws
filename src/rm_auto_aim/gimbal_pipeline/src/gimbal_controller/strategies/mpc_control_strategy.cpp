@@ -125,6 +125,11 @@ void MpcControlStrategy::setYawFeedforward(double yaw_feedforward_k_s)
   yaw_feedforward_k_s_ = yaw_feedforward_k_s;
 }
 
+void MpcControlStrategy::setManualOffset(double pitch_offset_deg, double yaw_offset_deg)
+{
+  ref_generator_.setManualOffset(pitch_offset_deg, yaw_offset_deg);
+}
+
 void MpcControlStrategy::setManeuverAdaptParameters(
   bool enable, double a_max, double eta, double tau, double r_scale)
 {
@@ -619,11 +624,19 @@ rm_interfaces::msg::GimbalCmd MpcControlStrategy::solve(
   double yaw_dot = 0.0;
   double pitch_dot = 0.0;
   if (has_prev_state_) {
-    yaw_dot = angles::normalize_angle(context.current_yaw - prev_yaw_) / dt_;
-    pitch_dot = (context.current_pitch - prev_pitch_) / dt_;
+    double state_dt = dt_;
+    if (context.current_time.nanoseconds() > 0 && prev_state_time_.nanoseconds() > 0) {
+      const double measured_dt = (context.current_time - prev_state_time_).seconds();
+      if (std::isfinite(measured_dt) && measured_dt > 1e-4 && measured_dt < 0.2) {
+        state_dt = std::max(measured_dt, dt_);
+      }
+    }
+    yaw_dot = angles::normalize_angle(context.current_yaw - prev_yaw_) / state_dt;
+    pitch_dot = (context.current_pitch - prev_pitch_) / state_dt;
   }
   prev_yaw_ = context.current_yaw;
   prev_pitch_ = context.current_pitch;
+  prev_state_time_ = context.current_time;
   has_prev_state_ = true;
 
   // 2) 组装当前状态

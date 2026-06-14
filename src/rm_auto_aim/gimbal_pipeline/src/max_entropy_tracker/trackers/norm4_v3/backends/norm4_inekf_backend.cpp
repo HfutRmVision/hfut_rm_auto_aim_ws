@@ -917,6 +917,21 @@ bool InvariantPoseBackend::check_posterior_sanity(
       angle_difference(x_post(idx.DELTA()), x_prior(idx.DELTA())));
   if (delta_jump > ps.max_yaw_jump) return false;
 
+  const double max_yaw_rate = std::max(0.1, config_.outpost.max_yaw_rate);
+  if (idx.has("DELTA_RATE") &&
+      (!std::isfinite(x_post(idx.DELTA_RATE())) ||
+       std::abs(x_post(idx.DELTA_RATE())) > max_yaw_rate)) {
+    return false;
+  }
+  if (idx.has("DELTA_ACC")) {
+    const double max_yaw_acc =
+        std::max(0.1, config_.outpost.v3_posterior_max_yaw_acc);
+    const int dacc = idx.get("DELTA_ACC");
+    if (!std::isfinite(x_post(dacc)) || std::abs(x_post(dacc)) > max_yaw_acc) {
+      return false;
+    }
+  }
+
   double r1 = x_post(idx.R1()), r2 = x_post(idx.R2());
   if (r1 < ps.min_r || r1 > ps.max_r || r2 < ps.min_r || r2 > ps.max_r)
     return false;
@@ -1094,6 +1109,17 @@ void InvariantPoseBackend::apply_state_constraints() {
       x_, idx.R1(), idx.R2(), idx.DZA(), config_.constraints.min_radius,
       config_.constraints.max_radius, 0.0, config_.constraints.max_dz);
   x_(idx.DELTA()) = normalize_angle(x_(idx.DELTA()));
+  if (idx.has("DELTA_RATE")) {
+    const double max_yaw_rate = std::max(0.1, config_.outpost.max_yaw_rate);
+    x_(idx.DELTA_RATE()) =
+        std::clamp(x_(idx.DELTA_RATE()), -max_yaw_rate, max_yaw_rate);
+  }
+  if (idx.has("DELTA_ACC")) {
+    const double max_yaw_acc =
+        std::max(0.1, config_.outpost.v3_posterior_max_yaw_acc);
+    const int dacc = idx.get("DELTA_ACC");
+    x_(dacc) = std::clamp(x_(dacc), -max_yaw_acc, max_yaw_acc);
+  }
 }
 
 }  // namespace fyt::auto_aim::norm4_v3

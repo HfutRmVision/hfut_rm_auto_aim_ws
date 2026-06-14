@@ -546,7 +546,7 @@ gimbal_pipeline:
       linear_velocity_damping: 0.90
       yaw_rate_damping: 0.98
       max_center_speed: 1.00
-      max_yaw_rate: 12.0
+      max_yaw_rate: 8.0
 
       # 模式切换
       # enter阈值升高=更难进模糊态，exit阈值升高=更难退出模糊态
@@ -603,8 +603,8 @@ gimbal_pipeline:
 
       solver:
         # 命中窗口: width/height 越大越容易触发开火，但精度要求更低
-        shooting_range_width: 0.135
-        shooting_range_height: 0.135
+        shooting_range_width: 0.145
+        shooting_range_height: 0.145
         side_angle: 25.0 # 侧身判定角(度)，过大可能放入不可打面
         min_switching_v_yaw: 0.0
         prediction_delay: 0.000   # 额外预测前瞻(s)
@@ -614,8 +614,8 @@ gimbal_pipeline:
         gravity: 9.8
         resistance: 0.001
         iteration_times: 20
-        pitch_offset: 0.0
-        yaw_offset: 0.0
+        pitch_offset: 0.35
+        yaw_offset: 0.5
         facing_enter_angle: 35.0
         facing_exit_angle: 50.0
         controller_delay: 0.000    # 旧链路兼容延时(s)
@@ -645,10 +645,10 @@ gimbal_pipeline:
           # 参考 /root/reference/sp_vision_25/tasks/auto_aim/aimer.cpp::choose_aim_point
           # 低速普通目标: 只在 shootable_angle_deg 内选板，双候选时锁定，避免 45deg 来回跳。
           # 高速/前哨站: 按 coming/leaving 角和 yaw_velocity 方向选将要转入视野的板。
-          low_speed_vyaw: 2.0
-          shootable_angle_deg: 60.0
-          coming_angle_deg: 60.0
-          leaving_angle_deg: 20.0
+          low_speed_vyaw: 6.5
+          shootable_angle_deg: 55.0
+          coming_angle_deg: 75.0
+          leaving_angle_deg: 35.0
           outpost_coming_angle_deg: 70.0
           outpost_leaving_angle_deg: 30.0
           hold_current_until_jump: false
@@ -807,15 +807,15 @@ gimbal_pipeline:
         N: 5
         dt: 0.05
         control_delay_s: 0.000
-        max_accel: 35.0
+        max_accel: 24.0
         q_yaw: 1000.0
         q_pitch: 300.0
-        q_yaw_vel: 1.0
-        q_pitch_vel: 1.5
+        q_yaw_vel: 2.4
+        q_pitch_vel: 2.6
         r_yaw: 0.001
         r_pitch: 0.0008
-        s_yaw: 0.01
-        s_pitch: 0.006
+        s_yaw: 0.045
+        s_pitch: 0.050
         enable_delay_compensation: true
         prediction_delay_s: 0.000
         flight_time_iters: 2
@@ -853,13 +853,13 @@ gimbal_pipeline:
 
         fov_constraint:
           # FOV软约束：用于限制参考轨迹不超云台视场
-          enable: false
-          margin: 0.05
-          slack_weight: 1000.0
-          constraint_steps: 0
+          enable: true
+          margin: 0.20
+          slack_weight: 600.0
+          constraint_steps: 3
           dynamic_margin:
-            enable: false
-            vel_scale: 0.01
+            enable: true
+            vel_scale: 0.004
           fallback_fov_yaw: 0.35
           fallback_fov_pitch: 0.26
 

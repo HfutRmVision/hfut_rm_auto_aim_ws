@@ -1024,6 +1024,8 @@ ArmorSelectionResult ArmorSelector::selectBySpVision25(
     return centerFallback();
   }
 
+  std::vector<int> coming_indices;
+  coming_indices.reserve(static_cast<size_t>(armor_count));
   for (int i = 0; i < armor_count; ++i) {
     const double delta = signed_radial_angles[static_cast<size_t>(i)];
     if (std::abs(delta) > coming_angle) {
@@ -1031,10 +1033,26 @@ ArmorSelectionResult ArmorSelector::selectBySpVision25(
     }
 
     if (target_v_yaw > 0.0 && delta < leaving_angle) {
-      return selectIndex(i, std::abs(delta));
+      coming_indices.push_back(i);
     }
     if (target_v_yaw < 0.0 && delta > -leaving_angle) {
-      return selectIndex(i, std::abs(delta));
+      coming_indices.push_back(i);
+    }
+  }
+
+  if (!coming_indices.empty()) {
+    std::vector<double> abs_angles = signed_radial_angles;
+    for (double & angle : abs_angles) {
+      angle = std::abs(angle);
+    }
+    auto result = selectMinMovementFromIndices(
+      armor_positions, coming_indices, &abs_angles, current_yaw, current_pitch);
+    if (result.selected_index >= 0) {
+      result.facing_angle = std::abs(signed_radial_angles[static_cast<size_t>(result.selected_index)]);
+      result.is_center_fallback = false;
+      result.is_virtual_target = false;
+      last_selected_index_ = result.selected_index;
+      return result;
     }
   }
 

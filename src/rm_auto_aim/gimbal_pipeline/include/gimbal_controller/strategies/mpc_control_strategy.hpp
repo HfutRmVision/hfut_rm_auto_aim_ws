@@ -93,6 +93,13 @@ public:
   void setYawFeedforward(double yaw_feedforward_k_s);
 
   /**
+   * @brief 设置手动角度补偿
+   *
+   * 参数单位与 predicted/current/state_machine 策略一致: 度。
+   */
+  void setManualOffset(double pitch_offset_deg, double yaw_offset_deg);
+
+  /**
    * @brief 设置 MPC 机动自适应权重衰减参数
    *
    * 启用后，每帧通过对 UKF center_velocity 做时间戳感知差分计算机动因子 alpha，
@@ -337,6 +344,7 @@ private:
   // 角速度差分估计状态
   double prev_yaw_{0.0};
   double prev_pitch_{0.0};
+  rclcpp::Time prev_state_time_{0, 0, RCL_ROS_TIME};
   bool has_prev_state_{false};
 
   // 延时补偿参数

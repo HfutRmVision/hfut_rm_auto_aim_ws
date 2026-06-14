@@ -81,6 +81,13 @@ public:
   }
 
   /**
+   * @brief 设置手动角度补偿
+   *
+   * 参数单位与其它控制策略保持一致: 度。
+   */
+  void setManualOffset(double pitch_offset_deg, double yaw_offset_deg);
+
+  /**
    * @brief 注入组件依赖
    */
   void setComponents(
@@ -156,6 +163,8 @@ private:
   std::shared_ptr<LocalTrajectoryCompensator> local_compensator_;
 
   VelocityClampConfig vel_clamp_config_{};
+  double pitch_offset_rad_{0.0};
+  double yaw_offset_rad_{0.0};
 };
 
 }  // namespace mpc

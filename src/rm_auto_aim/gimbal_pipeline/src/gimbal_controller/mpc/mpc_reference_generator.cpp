@@ -25,6 +25,13 @@ namespace gimbal_controller
 namespace mpc
 {
 
+void MpcReferenceGenerator::setManualOffset(double pitch_offset_deg, double yaw_offset_deg)
+{
+  constexpr double kDegToRad = M_PI / 180.0;
+  pitch_offset_rad_ = pitch_offset_deg * kDegToRad;
+  yaw_offset_rad_ = yaw_offset_deg * kDegToRad;
+}
+
 Eigen::VectorXd MpcReferenceGenerator::generate(
   const rm_interfaces::msg::TrackedRobot & target_robot,
   double current_yaw,
@@ -106,6 +113,9 @@ Eigen::VectorXd MpcReferenceGenerator::generate(
       //           << ", using geometric fallback. Target position: "
       //           << target_position.transpose() << std::endl;
     }
+
+    yaw_ref = angles::normalize_angle(yaw_ref + yaw_offset_rad_);
+    pitch_ref += pitch_offset_rad_;
 
     // 6. 估计参考角速度 (数值微分)
     //    对 yaw 做 unwrap 避免 ±π 跳变导致 yaw_dot 爆炸
@@ -234,6 +244,9 @@ Eigen::VectorXd MpcReferenceGenerator::generateWithDelay(
       yaw_ref = std::atan2(target_position.y(), target_position.x());
       pitch_ref = std::atan2(target_position.z(), dist_xy);
     }
+
+    yaw_ref = angles::normalize_angle(yaw_ref + yaw_offset_rad_);
+    pitch_ref += pitch_offset_rad_;
 
     // 8. 估计参考角速度
     //    对 yaw 做 unwrap 避免 ±π 跳变导致 yaw_dot 爆炸

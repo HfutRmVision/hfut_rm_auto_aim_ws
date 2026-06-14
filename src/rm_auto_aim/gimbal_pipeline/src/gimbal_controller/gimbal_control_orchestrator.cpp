@@ -142,6 +142,8 @@ bool GimbalControlOrchestrator::evaluateFireAdvice(
     request.current_yaw_accel = cmd.yaw_a * kDeg2Rad;
     request.current_pitch_accel = cmd.pitch_a * kDeg2Rad;
     request.bullet_speed = context.bullet_speed;
+    request.yaw_offset_rad = fire_cfg_.yaw_offset_rad;
+    request.pitch_offset_rad = fire_cfg_.pitch_offset_rad;
     request.timing.prediction_delay_s = std::max(fire_cfg_.prediction_delay_s, 0.0);
     request.timing.control_latency_s = std::max(fire_cfg_.control_latency_s, 0.0);
     request.timing.trigger_to_muzzle_s = std::max(fire_cfg_.trigger_to_muzzle_s, 0.0);
