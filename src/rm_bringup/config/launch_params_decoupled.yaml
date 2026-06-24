@@ -21,10 +21,10 @@ debug: true
 # enable_auto_buff: (true | false) 是否开启打符链路
 enable_auto_buff: false
 
-# detector_type: (armor_detector | armor_detector_nn)
-# armor_detector:    使用传统 OpenCV 灯条检测器
-# armor_detector_nn: 使用神经网络检测器
-detector_type: 'armor_detector'
+# detector_type: (armor_detector_nn | armor_detector)
+# armor_detector_nn: 与 sim 相同的神经网络识别器模块，实车默认使用
+# armor_detector:    传统 OpenCV 灯条检测器，只作为显式回退路径
+detector_type: 'armor_detector_nn'
 
 # use_camera_detector_container: (true | false)
 # true:  相机节点和检测节点放在同一 ComposableNodeContainer 中 (intra-process 零拷贝)

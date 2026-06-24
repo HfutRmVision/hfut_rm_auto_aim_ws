@@ -29,18 +29,11 @@ void Norm4ArmorTrackerV2::initialize(const std::vector<ObservationData> &obs,
   default_dza_ = dza;
   warmup_last_obs_ = obs[0];
 
-  const auto &warmup_cfg = config_.norm4_v3.warmup;
-  bool use_warmup = warmup_cfg.enable_dual_seed_01 && !obs[0].panel_id.has_value();
-
-  if (use_warmup) {
-    init_warmup(obs, r1, r2, dza);
-    set_mode(norm4_v3::Norm4V2Mode::AMBIGUOUS);
-  } else {
-    int init_panel = obs[0].panel_id.value_or(0);
-    backend_->reset(obs[0], init_panel, default_r1_, default_r2_, default_dza_);
-    current_panel_id_ = init_panel;
-    set_mode(norm4_v3::Norm4V2Mode::AMBIGUOUS);
-  }
+  int init_panel = obs[0].panel_id.value_or(0);
+  backend_->reset(obs[0], init_panel, default_r1_, default_r2_, default_dza_);
+  current_panel_id_ = init_panel;
+  warmup_state_.active = false;
+  set_mode(norm4_v3::Norm4V2Mode::STRUCTURED);
 
   transition_to(TrackerState::INITIALIZING);
   mark_initialized();
@@ -70,7 +63,8 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
     backend_->predict(obs_ts - current_time_.value());
   }
 
-  // Route through warmup if active (0/1 dual-seed settling phase).
+  // Legacy warmup is kept as a defensive path for old replay configs, but normal
+  // runtime initializes directly into the unified structured hypothesis pipeline.
   if (warmup_state_.active) {
     bool warmup_ok = run_warmup(obs);
     update_time(obs_ts);
@@ -95,7 +89,9 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
   // Build prior snapshot — all hypotheses evaluated from this single prior.
   auto ctx = backend_->buildPredictContext();
 
-  // Generate hypotheses: 1 obs → 4 single, 2+ obs → 8 dual.
+  // Generate all regular hypotheses for this frame. Single and multi-armor
+  // observations share the same evaluate -> gate -> commit path; multi-armor
+  // frames simply add dual hypotheses to the candidate set.
   auto hypotheses = hypothesis_generator_.generate(obs);
   hypothesis_generator_.attach_prior(&hypotheses);
 
@@ -116,7 +112,9 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
                                      obs[hyp.assignments[1].obs_index], p0, p1);
     }
     // Combine prior log weight into score.
-    eval.score = eval.log_likelihood + hyp.prior_log_weight;
+    const double obs_dim =
+        (hyp.kind == norm4_v3::HypothesisKind::Single) ? 4.0 : 8.0;
+    eval.score = (eval.log_likelihood / obs_dim) + hyp.prior_log_weight;
     evals.push_back(eval);
   }
 
@@ -140,10 +138,10 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
     }
   }
 
-  bool allow_commit = (mode_ == norm4_v3::Norm4V2Mode::STRUCTURED);
-  if (!allow_commit) {
-    decision_reason = "ambiguous_mode_predict_only";
-  } else if (best_idx >= 0) {
+  if (mode_ != norm4_v3::Norm4V2Mode::STRUCTURED) {
+    set_mode(norm4_v3::Norm4V2Mode::STRUCTURED);
+  }
+  if (best_idx >= 0) {
     // Commit gate: confidence / margin check before attempting trial.
     bool commit_gate_pass = true;
     std::ostringstream gate_oss;
@@ -198,6 +196,7 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
         std::ostringstream oss;
         oss << "committed_" << best_hyp.debug_name
             << "_nis=" << trial.eval.nis
+            << "_score=" << topk[best_idx].eval.score
             << "_conf=" << top1_confidence
             << "_margin=" << top1_top2_margin
             << "_recon=" << trial.reconstruction_pos_error;
@@ -210,7 +209,7 @@ bool Norm4ArmorTrackerV2::update(const std::vector<ObservationData> &obs) {
     } else {
       decision_reason = "commit_gate_fail:" + gate_oss.str();
     }
-  } else if (allow_commit) {
+  } else {
     decision_reason = "all_gate_fail";
   }
 
@@ -282,13 +281,13 @@ Eigen::Vector3d Norm4ArmorTrackerV2::get_publish_velocity() const {
 }
 
 bool Norm4ArmorTrackerV2::is_ambiguous_single_mode() const {
-  return mode_ == norm4_v3::Norm4V2Mode::AMBIGUOUS;
+  return false;
 }
 
 int Norm4ArmorTrackerV2::effective_num_armors() const { return 4; }
 
 double Norm4ArmorTrackerV2::confidence_scale() const {
-  return (mode_ == norm4_v3::Norm4V2Mode::AMBIGUOUS) ? 0.7 : 1.0;
+  return 1.0;
 }
 
 std::vector<geometry_msgs::msg::Pose>
@@ -356,7 +355,7 @@ void Norm4ArmorTrackerV2::select_topk(
 
 void Norm4ArmorTrackerV2::populate_debug_snapshot() {
   debug_snapshot_.valid = last_hypothesis_debug_.valid;
-  debug_snapshot_.track_mode = (mode_ == norm4_v3::Norm4V2Mode::AMBIGUOUS) ? 1 : 0;
+  debug_snapshot_.track_mode = 0;
   debug_snapshot_.current_panel_id = current_panel_id_;
   debug_snapshot_.mode_state = static_cast<int>(mode_);
 
@@ -407,7 +406,7 @@ void Norm4ArmorTrackerV2::init_warmup(const std::vector<ObservationData> &obs,
   // The warmup internally evaluates both H0 and H1 via evaluateSingle.
   backend_->reset(obs[0], 0, r1, r2, dza);
   warmup_last_obs_ = obs[0];
-  current_panel_id_ = -1;  // ambiguous during warmup
+  current_panel_id_ = -1;  // unresolved during legacy warmup
 
   warmup_state_.warmup_reason = "warmup_init_seed_01";
 }
@@ -489,15 +488,15 @@ bool Norm4ArmorTrackerV2::run_warmup(const std::vector<ObservationData> &obs) {
     warmup_state_.settle_frames = 0;
   }
 
-  // Timeout: stay ambiguous, keep shallow predict-only.
+  // Timeout: fall back to the unified structured path.
   if (warmup_state_.total_frames > warmup_cfg.warmup_frames * 3) {
     warmup_state_.active = false;
-    warmup_state_.warmup_reason += "_timeout";
-    // Stay in AMBIGUOUS mode with current backend state.
-    // backend_ keeps its last state; continue predict-only.
+    current_panel_id_ = 0;
+    set_mode(norm4_v3::Norm4V2Mode::STRUCTURED);
+    warmup_state_.warmup_reason += "_timeout_structured";
   }
 
-  // During warmup, do not commit — backend predict-only.
+  // During legacy warmup, do not commit; backend stays predict-only.
   return true;
 }
 
@@ -525,9 +524,9 @@ void Norm4ArmorTrackerV2::set_mode(norm4_v3::Norm4V2Mode m) {
 void Norm4ArmorTrackerV2::apply_mode_routing() {
   const auto &routing = config_.norm4_v3.mode_routing;
   // Phase-1 routing contract in this tracker:
-  // AMBIGUOUS: non-destructive predict/evaluate path (no commit in update).
-  // STRUCTURED: enable commit path.
-  // Output-side single-plate bridge is still external to this class.
+  // Ordinary 4-panel targets always publish structured robot semantics. Single
+  // and multi-observation frames differ only by hypothesis kind, not by pipeline.
+  // Outpost keeps its separate 3-panel special-case tracker.
   (void)routing;
 }
 

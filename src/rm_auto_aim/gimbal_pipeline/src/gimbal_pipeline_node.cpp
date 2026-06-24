@@ -1223,7 +1223,7 @@ void GimbalPipelineNode::declareTrackerParameters() {
   declare_parameter("tracker.jump_binding_switch_cooldown", 2);
   declare_parameter("tracker.jump_binding_dz_ema_alpha", 0.20);
   declare_parameter("tracker.jump_binding_confidence_floor", 0.15);
-  declare_parameter("tracker.degraded_single_obs_enable", true);
+  declare_parameter("tracker.degraded_single_obs_enable", false);
   declare_parameter("tracker.degraded_single_obs_streak", 8);
   declare_parameter("tracker.degraded_q_scale_r", 4.0);
   declare_parameter("tracker.degraded_q_scale_dza", 4.0);
@@ -1470,7 +1470,7 @@ void GimbalPipelineNode::declareTrackerParameters() {
   declare_parameter("norm4_v2.hypothesis_selector.max_reconstruction_pos_error", 0.30);
 
   // Norm4 V2 Warmup
-  declare_parameter("norm4_v2.warmup.enable_dual_seed_01", true);
+  declare_parameter("norm4_v2.warmup.enable_dual_seed_01", false);
   declare_parameter("norm4_v2.warmup.warmup_frames", 8);
   declare_parameter("norm4_v2.warmup.min_settle_frames", 3);
   declare_parameter("norm4_v2.warmup.min_margin_to_commit", 1.5);
@@ -1635,7 +1635,7 @@ void GimbalPipelineNode::declareTrackerParameters() {
   declare_parameter("norm4_v3.hypothesis_selector.evidence_prior_enable", false);
   declare_parameter("norm4_v3.hypothesis_selector.max_reconstruction_pos_error", 0.30);
 
-  declare_parameter("norm4_v3.warmup.enable_dual_seed_01", true);
+  declare_parameter("norm4_v3.warmup.enable_dual_seed_01", false);
   declare_parameter("norm4_v3.warmup.warmup_frames", 8);
   declare_parameter("norm4_v3.warmup.min_settle_frames", 3);
   declare_parameter("norm4_v3.warmup.min_margin_to_commit", 1.5);
@@ -2083,6 +2083,12 @@ void GimbalPipelineNode::applyTrackerParamsToConfig() {
         "Supported values: adaptive | norm4 | norm4_v2",
         c.tracker.implementation.c_str());
     c.tracker.implementation = "adaptive";
+  }
+  if (c.tracker.implementation == "norm4") {
+    RCLCPP_WARN(
+        get_logger(),
+        "tracker.implementation='norm4' is treated as the unified norm4_v2 "
+        "pipeline for non-outpost targets.");
   }
 
   c.tracker.tracking_thres = get_parameter("tracker.tracking_thres").as_int();

@@ -37,7 +37,10 @@ ArmorSelectionResult ArmorSelector::selectBest(
 {
   bool auto_switch_active = false;
   SelectionMethod effective_method = selection_method_;
-  if (virtual_auto_switch_enable_) {
+  // Outpost uses a dedicated 3-panel tracker and selector semantics. Keep the
+  // velocity-based virtual switch limited to normal robot geometries.
+  const bool allow_virtual_auto_switch = virtual_auto_switch_enable_ && num_armors != 3;
+  if (allow_virtual_auto_switch) {
     const double abs_v_yaw = std::abs(target_v_yaw);
     if (!abs_v_yaw_filter_initialized_) {
       filtered_abs_v_yaw_ = abs_v_yaw;
@@ -55,6 +58,8 @@ ArmorSelectionResult ArmorSelector::selectBest(
       virtual_mode_active_ = true;
     }
     auto_switch_active = virtual_mode_active_;
+  } else if (num_armors == 3) {
+    virtual_mode_active_ = false;
   }
 
   if (auto_switch_active) {

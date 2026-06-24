@@ -107,8 +107,9 @@ struct TrackerParameters {
   double jump_binding_dz_ema_alpha = 0.20;
   double jump_binding_confidence_floor = 0.15;
 
-  // Long single-observation degraded mode.
-  bool degraded_single_obs_enable = true;
+  // Legacy split-path single-observation degraded mode. Keep disabled for the
+  // unified non-outpost hypothesis pipeline.
+  bool degraded_single_obs_enable = false;
   int degraded_single_obs_streak = 8;
   double degraded_q_scale_r = 4.0;
   double degraded_q_scale_dza = 4.0;
@@ -461,7 +462,7 @@ struct Norm4V2SelectorConfig {
 };
 
 struct Norm4V2WarmupConfig {
-  bool enable_dual_seed_01 = true;
+  bool enable_dual_seed_01 = false;
   int warmup_frames = 8;
   int min_settle_frames = 3;
   double min_margin_to_commit = 1.5;

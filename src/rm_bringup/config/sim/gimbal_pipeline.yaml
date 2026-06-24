@@ -16,7 +16,7 @@ gimbal_pipeline:
     enable_oscillation_detection: false  # 跟踪抖动检测
     default_r1: 0.18                     # 初始半径1(m)，仅作初始化/弱先验
     default_r2: 0.18                     # 初始半径2(m)，允许在线自适应
-    default_dza: 0.02                     # 初始高低板差(m)
+    default_dza: 0.0                     # 初始高低板差(m)；高速原地靶按中心层起步，避免选板时 pitch 上下跳
     robot_description:
       strict_unknown_reject: true        # 严格拒绝未知 robot_id
       default_projection_mode: "yaw_plane" # yaw_plane | full_se3
@@ -101,7 +101,7 @@ gimbal_pipeline:
         width: 960           # 画布宽度（像素）
         height: 540          # 画布高度（像素）
         jpeg_quality: 70     # JPEG质量(20~100), 越小带宽越低
-      implementation: "norm4_v2" # 非 outpost 目标: "adaptive" | "norm4"
+      implementation: "norm4_v2" # 非 outpost 目标: "adaptive" | "norm4_v2"; "norm4"兼容到norm4_v2
       tracking_thres: 2          # 连续命中多少帧进入TRACKING
       lost_thres: 15              # 连续丢失多少帧进入LOST
       temp_lost_thres: 3         # 连续丢失多少帧进入TEMP_LOST
@@ -130,7 +130,8 @@ gimbal_pipeline:
       jump_binding_confidence_floor: 0.15 # 最低置信度地板
 
       # 单观测退化模式
-      # 调试建议：远距/遮挡频繁时开启，短时单板可更稳。
+      # 普通 4 板目标当前统一走 Norm4 hypothesis 链路；单板只是不含 dual 假设。
+      # 保持关闭，避免重新分叉成单板退化链路；outpost 仍由专用 3 板 tracker 处理。
       degraded_single_obs_enable: false
       degraded_single_obs_streak: 8  # 连续单观测触发阈值
       degraded_q_scale_r: 4.0        # 退化时半径过程噪声放大倍数
@@ -265,7 +266,7 @@ gimbal_pipeline:
         force_rotation_ca: false
         dual_raw_batch: true
         sigma_pos_xy: 0.06
-        sigma_pos_z: 0.08
+        sigma_pos_z: 0.12
         sigma_yaw: 0.12
         dual_raw_R_scale: 1.5
         gate:
@@ -280,7 +281,7 @@ gimbal_pipeline:
           structural_gain_dza: 0.0
         dual_update:
           structural_gain_r: 0.05
-          structural_gain_dza: 0.02
+          structural_gain_dza: 0.006
         posterior_sanity:
           max_center_jump: 0.25
           max_yaw_jump: 0.80
@@ -288,14 +289,14 @@ gimbal_pipeline:
           max_r: 0.50
           max_r_jump: 0.05
           min_dza: 0.0
-          max_dza: 0.15
-          max_dza_jump: 0.03
+          max_dza: 0.04
+          max_dza_jump: 0.030
       ukf_v2:
         enabled: true
         force_rotation_ca: false
         dual_raw_batch: true
         sigma_pos_xy: 0.06
-        sigma_pos_z: 0.08
+        sigma_pos_z: 0.12
         sigma_yaw: 0.12
         dual_raw_R_scale: 1.5
         gate:
@@ -307,10 +308,10 @@ gimbal_pipeline:
           dual_each_yaw_chi2: 9.0
         single_update:
           structural_gain_r: 0.01
-          structural_gain_dza: 0.01
+          structural_gain_dza: 0.0
         dual_update:
           structural_gain_r: 0.05
-          structural_gain_dza: 0.02
+          structural_gain_dza: 0.006
         posterior_sanity:
           max_center_jump: 0.25
           max_yaw_jump: 0.80
@@ -318,13 +319,13 @@ gimbal_pipeline:
           max_r: 0.50
           max_r_jump: 0.05
           min_dza: 0.0
-          max_dza: 0.15
-          max_dza_jump: 0.03
+          max_dza: 0.04
+          max_dza_jump: 0.030
       inekf:
         enabled: true
         dual_raw_batch: true
         sigma_pos_xy: 0.075
-        sigma_pos_z: 0.10
+        sigma_pos_z: 0.14
         sigma_yaw: 0.35
         dual_raw_R_scale: 1.8
         gate:
@@ -339,7 +340,7 @@ gimbal_pipeline:
           structural_gain_dza: 0.0
         dual_update:
           structural_gain_r: 0.010
-          structural_gain_dza: 0.008
+          structural_gain_dza: 0.002
         posterior_sanity:
           max_center_jump: 0.25
           max_yaw_jump: 0.90
@@ -347,15 +348,15 @@ gimbal_pipeline:
           max_r: 0.45
           max_r_jump: 0.025
           min_dza: 0.0
-          max_dza: 0.15
-          max_dza_jump: 0.03
+          max_dza: 0.04
+          max_dza_jump: 0.030
       slow_structure:
         enable: true                # 是否启用慢结构滤波（建议 true）
 
         # 1) 过程噪声 Q_theta：越大=结构参数跟踪越快，但更抖；越小=更稳但收敛慢
         q_theta_r1: 0.01          # r1 随时间漂移强度；抖动大就减小，跟不上就增大
         q_theta_r2: 0.01          # r2 同上
-        q_theta_dza: 0.01         # dza 建议比 r 更小（通常更稳定）
+        q_theta_dza: 0.001        # dza 慢更新；高速上下层切板时避免高差估计被单帧噪声拉动
 
         # 2) 先验中心：结构参数先验均值（初始化和长期回拉目标）
         prior_r1: 0.18              # 半径弱先验，不绑定具体构型
@@ -364,7 +365,7 @@ gimbal_pipeline:
 
         # 3) 先验方差：越大=越不信先验；越小=更强地拉回先验
         prior_sigma_r: 0.18        # 半径先验不确定度，大=允许不同车体结构
-        prior_sigma_dza: 0.06      # dza 先验不确定度
+        prior_sigma_dza: 0.025     # dza 先验不确定度；小一些可抑制高差漂移导致的pitch跳动
 
         # 4) 单板更新增益：单板无法可靠分辨半径，保持近似冻结
         alpha_r1_single: 0.0
@@ -375,7 +376,7 @@ gimbal_pipeline:
         #    越大=收敛更快但更敏感；越小=更稳但更慢
         alpha_r1_dual: 0.018       # 双板时才主要学习结构，防止 yaw 噪声拉飞
         alpha_r2_dual: 0.018
-        alpha_dza_dual: 0.010
+        alpha_dza_dual: 0.002
 
         # 6) 先验回拉强度：长期防漂移，过大会“拉死”真实变化
         prior_pull_gain: 0.0015      # 弱回拉，避免绑定某个构型
@@ -384,7 +385,7 @@ gimbal_pipeline:
         min_r: 0.08
         max_r: 0.45
         min_dza: 0.0
-        max_dza: 0.12
+        max_dza: 0.04
 
       hypothesis_selector:
         topk: 4
@@ -396,7 +397,7 @@ gimbal_pipeline:
         evidence_prior_enable: true
         max_reconstruction_pos_error: 0.30
       warmup:
-        enable_dual_seed_01: true
+        enable_dual_seed_01: false
         warmup_frames: 6
         min_settle_frames: 2
         min_margin_to_commit: 0.35
@@ -607,18 +608,18 @@ gimbal_pipeline:
 
       solver:
         # 命中窗口: width/height 越大越容易触发开火，但精度要求更低
-        shooting_range_width: 0.145
-        shooting_range_height: 0.145
+        shooting_range_width: 0.160
+        shooting_range_height: 0.155
         side_angle: 25.0 # 侧身判定角(度)，过大可能放入不可打面
         min_switching_v_yaw: 0.0
-        prediction_delay: 0.000   # 额外预测前瞻(s)
+        prediction_delay: 0.018   # 额外预测前瞻(s)，统一参数读取优先级高于 controller.mpc.prediction_delay_s
         max_prediction_time: 0.500 # 预测时域上限(s)
         max_tracking_v_yaw: 12.0
         transfer_thresh: 5
         gravity: 9.8
         resistance: 0.001
         iteration_times: 20
-        pitch_offset: 0.35
+        pitch_offset: -0.20
         yaw_offset: 0.5
         facing_enter_angle: 35.0
         facing_exit_angle: 50.0
@@ -637,11 +638,12 @@ gimbal_pipeline:
 
         virtual_pose:
           # 虚拟板策略：高速旋转下可降低目标角速度突变
+          # auto_switch 只对非 3 板目标生效；outpost 继续走专用三板逻辑。
           auto_switch:
-            enable: false
-            enter_vyaw: 8.0
-            exit_vyaw: 6.0
-            selection_method: "virtual_pose" # "virtual_pose" | "virtual_fixed_id"
+            enable: true
+            enter_vyaw: 5.5
+            exit_vyaw: 4.5
+            selection_method: "virtual_fixed_id" # "virtual_pose" | "virtual_fixed_id"
             fixed_id: 0
           fixed_id: 0
 
@@ -672,7 +674,7 @@ gimbal_pipeline:
       # 统一延时参数（推荐新链路）
       # 优先使用该组；旧的 solver/state_machine/mpc 同名延时仅做兼容
       delay:
-        prediction_extra_s: 0.000    # 预测补偿额外项(s)
+        prediction_extra_s: 0.018    # 预测补偿额外项(s)
         control_latency_s: 0.000     # 控制链路延时(s)
         trigger_to_muzzle_s: 0.000     # 触发到出膛延时(s)
         max_processing_delay_s: 0.5  # 处理延时上限保护(s)
@@ -693,7 +695,7 @@ gimbal_pipeline:
           # 参数组建议：
           # - 先调窗口(future_window/step)，再调融合(softmax/window_fusion)，最后调门控(gate.*)
           enable: false
-          future_window_ms: 20.0          # 未来窗口长度(ms)，越大越容易抓住短暂可打时刻
+          future_window_ms: 28.0          # 未来窗口长度(ms)，越大越容易抓住短暂可打时刻
           future_step_ms: 1.0            # tau 采样步长(ms)，当前代码最小按 1ms 生效
           window_fusion: "max"           # "max" | "softmax"，max 更激进，softmax 更平滑
           softmax_beta: 20.0             # softmax 融合尖锐度，越大越接近 max
@@ -739,8 +741,8 @@ gimbal_pipeline:
             strategy: "burst_evidence"           # "legacy" | "burst_evidence"
             mode: "lowpass"              # legacy 下可选 "lowpass" | "integrator"
             alpha: 0.85                  # legacy/lowpass 平滑系数，越大越稳但更慢
-            fire_on_th: 0.65             # legacy 开火阈值
-            fire_off_th: 0.35            # legacy 关火阈值，需与 fire_on_th 保持回差
+            fire_on_th: 0.55             # legacy 开火阈值
+            fire_off_th: 0.30            # legacy 关火阈值，需与 fire_on_th 保持回差
             integrator_base_probability: 0.45 # legacy/integrator 的平衡点
             integrator_rise: 8.0         # legacy/integrator 上升速度
             integrator_fall: 6.0         # legacy/integrator 下降速度
@@ -752,8 +754,8 @@ gimbal_pipeline:
 
           evidence:
             # burst_evidence 下的证据生成与弱化参数
-            reference_probability_p0: 0.90   # 参考命中概率，pb > p0 才更容易形成正证据
-            window_ms: 50.0                  # 证据滑窗长度(ms)，越长越稳但更容易拖慢响应
+            reference_probability_p0: 0.78   # 参考命中概率，pb > p0 才更容易形成正证据
+            window_ms: 30.0                  # 证据滑窗长度(ms)，越长越稳但更容易拖慢响应
             log_clip: 2.0                    # 正证据最大对数强度
             epsilon: 0.001                   # log-odds 数值保护项
             neutralize_unshootable_samples: true # 不可打面记中性样本，不累计负证据
@@ -763,11 +765,11 @@ gimbal_pipeline:
 
           temperature:
             # burst_evidence 两态门控阈值插值参数
-            value: 0.7                       # 0=更冷更严格，1=更热更容易触发
-            theta_on_cold: 0.90              # 冷态 Idle->FireCommit 阈值
-            theta_on_hot: 0.75               # 热态 Idle->FireCommit 阈值
-            theta_hold_cold: 0.70            # 冷态 FireCommit 保持阈值
-            theta_hold_hot: 0.55             # 热态 FireCommit 保持阈值
+            value: 1.0                       # 0=更冷更严格，1=更热更容易触发
+            theta_on_cold: 0.82              # 冷态 Idle->FireCommit 阈值
+            theta_on_hot: 0.60               # 热态 Idle->FireCommit 阈值
+            theta_hold_cold: 0.62            # 冷态 FireCommit 保持阈值
+            theta_hold_hot: 0.42             # 热态 FireCommit 保持阈值
             theta_reset_cold: 0.45           # 兼容旧 cooldown 逻辑，当前两态 gate 不使用
             theta_reset_hot: 0.35            # 兼容旧 cooldown 逻辑，当前两态 gate 不使用
 
@@ -811,17 +813,17 @@ gimbal_pipeline:
         N: 5
         dt: 0.05
         control_delay_s: 0.000
-        max_accel: 24.0
+        max_accel: 65.0
         q_yaw: 1000.0
-        q_pitch: 260.0
+        q_pitch: 180.0
         q_yaw_vel: 2.4
         q_pitch_vel: 3.4
-        r_yaw: 0.001
-        r_pitch: 0.0010
-        s_yaw: 0.045
-        s_pitch: 0.070
+        r_yaw: 0.0013
+        r_pitch: 0.0026
+        s_yaw: 0.050
+        s_pitch: 0.100
         enable_delay_compensation: true
-        prediction_delay_s: 0.000
+        prediction_delay_s: 0.018
         flight_time_iters: 2
         max_processing_delay_s: 0.5
         yaw_feedforward_k_s: 0.0
@@ -915,16 +917,16 @@ gimbal_pipeline:
       output_filter:
         enable_clamping: true
         max_yaw_diff: 15.0
-        max_pitch_diff: 15.0
-        enable_outlier_rejection: false
-        outlier_threshold_yaw: 8.0
-        outlier_threshold_pitch: 8.0
+        max_pitch_diff: 8.0
+        enable_outlier_rejection: true
+        outlier_threshold_yaw: 4.0
+        outlier_threshold_pitch: 3.5
         max_outlier_count: 3
         enable_rate_limiter: true
-        max_yaw_rate: 5.0
-        max_pitch_rate: 6.0
-        enable_moving_average: false
-        moving_average_window_size: 3
+        max_yaw_rate: 2.0
+        max_pitch_rate: 1.0
+        enable_moving_average: true
+        moving_average_window_size: 5
         enable_ema: false
         ema_alpha: 0.7
         enable_one_euro: false
@@ -940,7 +942,7 @@ gimbal_pipeline:
     # 注意：避免与 controller.* 同时调同语义参数，否则调参难以追因。
     # =========================
     solver:
-      prediction_delay: 0.000
+      prediction_delay: 0.018
       max_prediction_time: 0.5
       controller_delay: 0.000
       trigger_to_muzzle_s: 0.000
@@ -952,7 +954,7 @@ gimbal_pipeline:
     mpc:
       control_delay_s: 0.000
       enable_delay_compensation: false
-      prediction_delay_s: 0.000
+      prediction_delay_s: 0.018
       flight_time_iters: 2
       max_processing_delay_s: 0.5
 

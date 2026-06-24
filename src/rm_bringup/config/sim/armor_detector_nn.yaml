@@ -121,7 +121,7 @@ armor_detector:
       force_pnp_rotate_180: false     # PnP解整体反向时的临时修正开关
 
       depth_correction:
-        enabled: true                 # 用灯条像素尺度约束深度，远距跳深度时开启
+        enabled: false                # 高速原地旋转时灯条尺度会周期变化，先关闭避免深度/pitch注入抖动
         min_depth_delta_m: 0.06       # 深度差小于该值不修正
         blend_alpha: 0.85             # 修正融合系数，越大越相信原PnP
         max_correction_m: 0.70        # 单次最大深度修正(m)
@@ -129,7 +129,7 @@ armor_detector:
         min_lightbar_length_px: 4.0   # 低于该灯条长度不做深度修正
 
       refiner:
-        mode: "single_yaw"                  # none | single_yaw | sliding_window；当前仿真raw PnP更稳，避免精修引入云台相关抖动
+        mode: "none"                  # none | single_yaw | sliding_window；高速旋转先走raw PnP，避免精修引入云台相关抖动
 
       single_yaw:
         max_iterations: 12            # 单帧yaw优化迭代次数
@@ -185,7 +185,7 @@ armor_detector:
     # - 帧率下降：减小max_targets_per_frame或time_budget_ms。
     # =========================
     corner_refine:
-      enabled: true
+      enabled: false                  # 高速靶先关闭灯条角点精修，排除精修角点在旋转/模糊下造成的pitch跳变
       method: "sp25_lightbar"
       apply_on_confirmed_only: true  # true只精修已确认track；false首帧也精修
       max_targets_per_frame: 2        # 单帧最多精修目标数；双板可见时两块都精修

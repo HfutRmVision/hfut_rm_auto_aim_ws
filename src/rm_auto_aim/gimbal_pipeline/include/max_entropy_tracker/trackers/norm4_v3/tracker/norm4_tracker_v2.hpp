@@ -37,7 +37,7 @@ class Norm4ArmorTrackerV2 : public BaseTracker {
 
   Eigen::Vector3d get_publish_velocity() const override;
   bool is_ambiguous_single_mode() const override;
-  bool supports_ambiguous_single_semantics() const override { return true; }
+  bool supports_ambiguous_single_semantics() const override { return false; }
   int effective_num_armors() const override;
   double confidence_scale() const override;
   std::vector<geometry_msgs::msg::Pose> build_armors_offset_for_message() const override;
@@ -78,7 +78,7 @@ class Norm4ArmorTrackerV2 : public BaseTracker {
   std::optional<ObservationData> warmup_last_obs_;
 
   int current_panel_id_ = -1;
-  norm4_v3::Norm4V2Mode mode_ = norm4_v3::Norm4V2Mode::AMBIGUOUS;
+  norm4_v3::Norm4V2Mode mode_ = norm4_v3::Norm4V2Mode::STRUCTURED;
   norm4_v3::WarmupState warmup_state_{};
 
   norm4_v3::HypothesisDebugFrame last_hypothesis_debug_{};

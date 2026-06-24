@@ -7,17 +7,7 @@ namespace fyt::auto_aim::norm4_v3 {
 
 std::vector<Hypothesis> HypothesisGenerator::generate(
     const std::vector<ObservationData> &observations) const {
-  if (observations.empty()) return {};
-
-  if (observations.size() == 1) {
-    return generate_single(0);
-  }
-
-  // For 2+ observations, use the first two for dual enumeration.
-  // Multi-obs combination (selecting best two) is a Phase 1.5 item.
-  int obs0 = 0;
-  int obs1 = 1;
-  return generate_dual(obs0, obs1);
+  return generate_all_candidates(observations);
 }
 
 std::vector<Hypothesis> HypothesisGenerator::generate_single(
@@ -66,6 +56,29 @@ std::vector<Hypothesis> HypothesisGenerator::generate_dual(
 
     hyps.push_back(h);
   }
+  return hyps;
+}
+
+std::vector<Hypothesis> HypothesisGenerator::generate_all_candidates(
+    const std::vector<ObservationData> &observations) const {
+  std::vector<Hypothesis> hyps;
+  if (observations.empty()) return hyps;
+
+  const int obs_count = static_cast<int>(observations.size());
+  hyps.reserve(static_cast<size_t>(obs_count * 4 + obs_count * (obs_count - 1) * 4));
+
+  for (int obs_index = 0; obs_index < obs_count; ++obs_index) {
+    auto single_hyps = generate_single(obs_index);
+    hyps.insert(hyps.end(), single_hyps.begin(), single_hyps.end());
+  }
+
+  for (int obs0 = 0; obs0 < obs_count; ++obs0) {
+    for (int obs1 = obs0 + 1; obs1 < obs_count; ++obs1) {
+      auto dual_hyps = generate_dual(obs0, obs1);
+      hyps.insert(hyps.end(), dual_hyps.begin(), dual_hyps.end());
+    }
+  }
+
   return hyps;
 }
 

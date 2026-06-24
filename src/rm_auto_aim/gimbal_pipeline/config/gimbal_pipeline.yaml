@@ -101,7 +101,7 @@ gimbal_pipeline:
         width: 960           # 画布宽度（像素）
         height: 540          # 画布高度（像素）
         jpeg_quality: 70     # JPEG质量(20~100), 越小带宽越低
-      implementation: "norm4_v2" # 非 outpost 目标: "adaptive" | "norm4" | "norm4_v2"
+      implementation: "norm4_v2" # 非 outpost 目标: "adaptive" | "norm4_v2"; "norm4"兼容到norm4_v2
       tracking_thres: 2          # 连续命中多少帧进入TRACKING
       lost_thres: 4              # 连续丢失多少帧进入LOST
       temp_lost_thres: 3         # 连续丢失多少帧进入TEMP_LOST
@@ -130,8 +130,9 @@ gimbal_pipeline:
       jump_binding_confidence_floor: 0.15 # 最低置信度地板
 
       # 单观测退化模式
-      # 调试建议：远距/遮挡频繁时开启，短时单板可更稳。
-      degraded_single_obs_enable: true
+      # 普通 4 板目标统一走 Norm4 hypothesis 链路；单板只是不含 dual 假设。
+      # 保持关闭，避免重新分叉成单板退化链路；outpost 仍由专用 3 板 tracker 处理。
+      degraded_single_obs_enable: false
       degraded_single_obs_streak: 8  # 连续单观测触发阈值
       degraded_q_scale_r: 4.0        # 退化时半径过程噪声放大倍数
       degraded_q_scale_dza: 4.0      # 退化时dz过程噪声放大倍数
@@ -260,7 +261,7 @@ gimbal_pipeline:
         evidence_prior_enable: false
         max_reconstruction_pos_error: 0.30
       warmup:
-        enable_dual_seed_01: true
+        enable_dual_seed_01: false
         warmup_frames: 8
         min_settle_frames: 3
         min_margin_to_commit: 1.5
@@ -420,7 +421,7 @@ gimbal_pipeline:
         evidence_prior_enable: false
         max_reconstruction_pos_error: 0.30
       warmup:
-        enable_dual_seed_01: true
+        enable_dual_seed_01: false
         warmup_frames: 8
         min_settle_frames: 3
         min_margin_to_commit: 1.5

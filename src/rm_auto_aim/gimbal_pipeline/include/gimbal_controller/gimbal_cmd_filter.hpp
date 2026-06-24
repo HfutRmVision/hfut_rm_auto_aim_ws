@@ -3,7 +3,8 @@
 //
 // GimbalCmdFilter — 输出端保护滤波器
 //
-// 在 GimbalCmd 发布前对 yaw_diff / pitch_diff 执行可配置的多级保护：
+// 在 GimbalCmd 发布前对 yaw_diff / pitch_diff 执行可配置的多级保护，
+// 并同步约束 yaw / pitch，保证绝对角和差分角两条命令链路同样受保护：
 //
 //   0. 绝对限幅 (Clamping)        — 硬上限，防止极端值
 //   1. 外点检测 (Outlier Reject)  — 帧间突变超阈值时 hold 上帧
@@ -104,6 +105,9 @@ class GimbalCmdFilter {
 
   /// 就地修改 cmd，依次执行启用的各级保护
   void filter(rm_interfaces::msg::GimbalCmd &cmd) {
+    const double yaw_base = cmd.yaw - cmd.yaw_diff;
+    const double pitch_base = cmd.pitch - cmd.pitch_diff;
+
     // ── 0. Clamping ──
     if (cfg_.enable_clamping) {
       cmd.yaw_diff   = std::clamp(cmd.yaw_diff,
@@ -114,12 +118,16 @@ class GimbalCmdFilter {
 
     if (!has_prev_) {
       // 首帧：跳过需要历史的保护，直接记录
+      syncAbsoluteFromDiff(cmd, yaw_base, pitch_base);
+      syncDerivativesFromAbsoluteStep(cmd, false);
       savePrev(cmd);
       has_prev_ = true;
       // 仍对首帧执行 1-Euro 初始化（会自动设初值）
       if (cfg_.enable_one_euro) {
         cmd.yaw_diff   = yaw_euro_.filter(cmd.yaw_diff);
         cmd.pitch_diff = pitch_euro_.filter(cmd.pitch_diff);
+        syncAbsoluteFromDiff(cmd, yaw_base, pitch_base);
+        syncDerivativesFromAbsoluteStep(cmd, false);
         savePrev(cmd);
       }
       return;
@@ -144,6 +152,10 @@ class GimbalCmdFilter {
           // cmd.yaw / pitch 也修正为一致（保持时序连贯）
           cmd.yaw   = prev_cmd_.yaw;
           cmd.pitch = prev_cmd_.pitch;
+          cmd.yaw_v = prev_cmd_.yaw_v;
+          cmd.pitch_v = prev_cmd_.pitch_v;
+          cmd.yaw_a = 0.0;
+          cmd.pitch_a = 0.0;
           savePrev(cmd);
           return;
         } else {
@@ -187,10 +199,61 @@ class GimbalCmdFilter {
       cmd.pitch_diff = pitch_euro_.filter(cmd.pitch_diff);
     }
 
+    syncAbsoluteFromDiff(cmd, yaw_base, pitch_base);
+    if (cfg_.enable_rate_limiter) {
+      limitAbsoluteStep(cmd);
+      syncDiffFromAbsolute(cmd, yaw_base, pitch_base);
+    }
+    syncDerivativesFromAbsoluteStep(cmd, true);
     savePrev(cmd);
   }
 
  private:
+  static double normalizeDegrees(double angle)
+  {
+    return std::remainder(angle, 360.0);
+  }
+
+  static void syncAbsoluteFromDiff(
+    rm_interfaces::msg::GimbalCmd &cmd, double yaw_base, double pitch_base)
+  {
+    cmd.yaw = yaw_base + normalizeDegrees(cmd.yaw_diff);
+    cmd.pitch = pitch_base + cmd.pitch_diff;
+  }
+
+  static void syncDiffFromAbsolute(
+    rm_interfaces::msg::GimbalCmd &cmd, double yaw_base, double pitch_base)
+  {
+    cmd.yaw_diff = normalizeDegrees(cmd.yaw - yaw_base);
+    cmd.pitch_diff = cmd.pitch - pitch_base;
+  }
+
+  void limitAbsoluteStep(rm_interfaces::msg::GimbalCmd &cmd) const
+  {
+    const double delta_yaw = std::clamp(
+      normalizeDegrees(cmd.yaw - prev_cmd_.yaw), -cfg_.max_yaw_rate, cfg_.max_yaw_rate);
+    const double delta_pitch = std::clamp(
+      cmd.pitch - prev_cmd_.pitch, -cfg_.max_pitch_rate, cfg_.max_pitch_rate);
+
+    cmd.yaw = prev_cmd_.yaw + delta_yaw;
+    cmd.pitch = prev_cmd_.pitch + delta_pitch;
+  }
+
+  void syncDerivativesFromAbsoluteStep(rm_interfaces::msg::GimbalCmd &cmd, bool use_previous) const
+  {
+    cmd.yaw_a = 0.0;
+    cmd.pitch_a = 0.0;
+
+    if (!use_previous || cfg_.one_euro_freq <= 0.0 || !std::isfinite(cfg_.one_euro_freq)) {
+      cmd.yaw_v = 0.0;
+      cmd.pitch_v = 0.0;
+      return;
+    }
+
+    cmd.yaw_v = normalizeDegrees(cmd.yaw - prev_cmd_.yaw) * cfg_.one_euro_freq;
+    cmd.pitch_v = (cmd.pitch - prev_cmd_.pitch) * cfg_.one_euro_freq;
+  }
+
   static int normalizeWindowSize(int w) {
     return std::max(1, w);
   }

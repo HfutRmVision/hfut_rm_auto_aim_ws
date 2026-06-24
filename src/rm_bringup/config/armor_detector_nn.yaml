@@ -1,0 +1,236 @@
+# 实车共用 armor_detector_nn 覆盖配置。
+# bringup_pipeline.launch.py 会按顺序加载：
+#   1) armor_detector_nn 包内默认 config/armor_detector_nn.yaml
+#   2) 当前文件，覆盖实车需要调整的参数
+# 若某台车需要单独调参，可在 rm_bringup/config/<robot>/armor_detector_nn.yaml
+# 新建同名文件，launch 会优先使用 robot 专属覆盖。
+armor_detector:
+  ros__parameters:
+    # =========================
+    # 基础运行参数
+    # =========================
+    debug: true
+    debug_pose_compare: false         # 对比原始PnP/精修PnP，排查位姿跳变时开启
+    publish_in_target_frame: false    # false: 保留相机观测frame，由 gimbal_pipeline 做TF
+    target_frame: "odom"
+
+    # =========================
+    # 推理后端
+    # 与 sim 使用同一个 armor_detector_nn 模块和 0526 模型。
+    # 实车 NVIDIA 平台优先 onnxruntime+cuda；无CUDA时 allow_fallback 会回退。
+    # 可选:
+    #   backend.type: onnxruntime | openvino | tensorrt
+    #   backend.device: cuda | cpu
+    #   backend.precision: fp32 | fp16 | int8
+    # =========================
+    backend:
+      type: "onnxruntime"
+      device: "cuda"
+      precision: "fp16"
+      model_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
+      engine_path: "package://armor_detector_nn/model/RobotDetectionModel/0526.onnx"
+      openvino_model_xml: ""
+      openvino_model_bin: ""
+      input_name: "images"
+      output_names: ["output"]
+      warmup_iterations: 10
+      num_threads: 2
+      use_pinned_memory: true
+      allow_fallback: true
+      fallback_type: "onnxruntime"
+
+    # =========================
+    # 预处理
+    # 当前代码实际读取 input_width/input_height/input_color/normalize/mean/std/pad_value。
+    # 不再写旧版 input_layout/resize_mode，避免配置和代码脱节。
+    # =========================
+    preprocess:
+      input_width: 640
+      input_height: 640
+      input_color: "rgb"
+      normalize: true
+      mean: [0.0, 0.0, 0.0]
+      std: [255.0, 255.0, 255.0]
+      pad_value: 114.0
+
+    # =========================
+    # 后处理/解码
+    # 0526 模型使用 robotpilots_landmark 解码，输出为 bbox+class+4角点。
+    # 误检多: 提高 conf_threshold 或降低 nms_threshold。
+    # 漏检多: 降低 conf_threshold 或放宽 quality_filter。
+    # =========================
+    postprocess:
+      strategy: "robotpilots_landmark"
+      num_classes: 14
+      num_keypoints: 4
+      keypoint_dims: 2
+      bbox_offset: 0
+      class_offset: 4
+      keypoint_offset: 18
+      conf_threshold: 0.75
+      nms_threshold: 0.25
+      max_detections: 32
+      class_agnostic_nms: false
+      keypoint_remap: [0, 1, 2, 3]
+      keypoint_auto_reorder: true
+
+    label_map:
+      path: "package://armor_detector_nn/config/label_map.yaml"
+
+    # =========================
+    # 检测质量过滤
+    # 真实目标被过滤: 降低 min_area_px/min_lightbar_length_px 或放宽 ratio/error。
+    # 畸形角点进入PnP: 收紧 max_rectangular_error_deg/max_side_ratio。
+    # =========================
+    quality_filter:
+      enabled: true
+      min_armor_ratio: 1.2
+      max_armor_ratio: 4.2
+      max_side_ratio: 1.12
+      max_rectangular_error_deg: 8.0
+      min_lightbar_length_px: 10.0
+      min_area_px: 120.0
+      deduplicate_enabled: true
+      duplicate_iou_threshold: 0.50
+      duplicate_keypoint_mean_dist_px: 8.0
+
+    # =========================
+    # PnP与位姿精修
+    # 当前代码读取 pose.* 下列字段；单板/多板合并后，下游 gimbal_pipeline
+    # 统一消费 detector 发布的 Armors，不再依赖传统单板退化链路。
+    # =========================
+    pose:
+      pnp_method: "ippe"
+      small_armor_width: 0.135
+      small_armor_height: 0.055
+      large_armor_width: 0.225
+      large_armor_height: 0.050
+      force_pnp_rotate_180: false
+
+      depth_correction:
+        enabled: true
+        min_depth_delta_m: 0.06
+        blend_alpha: 0.85
+        max_correction_m: 0.70
+        max_scale: 1.40
+        min_lightbar_length_px: 4.0
+
+      refiner:
+        mode: "single_yaw"            # none | single_yaw | sliding_window
+
+      single_yaw:
+        max_iterations: 12
+        huber_delta: 4.0
+        pitch_deg_default: 15.0
+        roll_deg_default: 0.0
+        outpost_pitch_sign: true
+
+      sliding:
+        window_size: 3
+        min_frames: 2
+        max_time_span_ms: 120.0
+        max_solver_time_ms: 2.0
+        max_opt_iters: 12
+        sigma_prior_xy: 0.08
+        sigma_prior_z: 0.15
+        sigma_prior_yaw: 0.35
+        sigma_smooth_xy: 0.08
+        sigma_smooth_z: 0.14
+        sigma_smooth_yaw: 0.18
+        sigma_kp_min: 1.0
+        sigma_kp_scale: 5.0
+        huber_delta: 3.0
+
+      gate:
+        max_raw_reproj_error: 1.2
+        max_reproj_error: 2.2
+        max_pose_delta_m: 0.16
+        max_yaw_delta_deg: 18.0
+        require_finite: true
+
+    # =========================
+    # 检测级2D tracker
+    # 只负责同一检测框的短时ID稳定，真正的4板/3板目标跟踪在 gimbal_pipeline。
+    # =========================
+    tracker:
+      strategy: "internal_iou"
+      iou_threshold: 0.20
+      max_missed: 15
+      min_hits: 2
+      max_center_dist_px: 180
+
+    # =========================
+    # 角点精修
+    # 精修后更抖: 减小 max_corner_shift/center_shift 或直接关闭 enabled。
+    # 帧率下降: 减小 max_targets_per_frame 或 time_budget_ms。
+    # =========================
+    corner_refine:
+      enabled: true
+      method: "sp25_lightbar"
+      apply_on_confirmed_only: true
+      max_targets_per_frame: 2
+      time_budget_ms: 3.5
+      roi_expand_ratio: 1.1
+      min_bright_points: 50
+      pca_stability_threshold: 0.85
+      max_aspect_ratio: 5.0
+      min_aspect_ratio: 1.5
+      max_corner_shift_px: 4.0
+      max_mean_corner_shift_px: 1.8
+      max_refined_center_shift_px: 1.8
+      min_refine_quality: 0.88
+      preserve_perspective: true
+      max_edge_angle_delta_deg: 12.0
+      max_area_ratio_delta: 0.12
+      max_length_ratio_delta: 0.18
+      full_roi_expand_ratio: 1.45
+      binary_threshold: 120.0
+      min_contour_area_px: 8.0
+      min_lightbar_length_px: 6.0
+      min_lightbar_ratio: 1.4
+      max_lightbar_ratio: 20.0
+      max_lightbar_angle_error_deg: 40.0
+      max_rectangular_error_deg: 0.0
+      max_side_ratio: 1.8
+      max_lightbar_match_error_px: 18.0
+      max_pair_center_shift_px: 30.0
+
+    # =========================
+    # 传统灯条融合
+    # 与 sim 相同，NN 稳定时优先使用 NN；NN漏检时 fallback 补传统候选。
+    # =========================
+    traditional_fusion:
+      enabled: true
+      strategy: "fallback"            # fallback | always
+      min_nn_detections: 1
+      confidence_scale: 1.05
+      binary_thres: 120
+      use_classifier: true
+      classifier_threshold: 0.7
+      ignore_classes: ["negative"]
+      use_pca: true
+
+      light:
+        min_ratio: 0.08
+        max_ratio: 0.4
+        max_angle: 40.0
+        color_diff_thresh: 25
+
+      armor:
+        min_light_ratio: 0.8
+        min_small_center_distance: 0.8
+        max_small_center_distance: 3.5
+        min_large_center_distance: 3.5
+        max_large_center_distance: 8.0
+        max_angle: 45.0
+
+    # =========================
+    # 运行时策略
+    # color_filter_source=model: 按模型类别颜色过滤。
+    # 调试敌方颜色或模型颜色分类不稳时可改 disabled。
+    # =========================
+    runtime:
+      color_filter_source: "model"
+      publish_empty: true
+      copy_policy: "copy_on_write_debug"
+      profile: true

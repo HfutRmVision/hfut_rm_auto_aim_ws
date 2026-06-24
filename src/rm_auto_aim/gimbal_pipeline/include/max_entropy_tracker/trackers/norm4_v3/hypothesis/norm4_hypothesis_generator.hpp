@@ -24,6 +24,8 @@ class HypothesisGenerator {
  private:
   std::vector<Hypothesis> generate_single(int obs_index) const;
   std::vector<Hypothesis> generate_dual(int obs0, int obs1) const;
+  std::vector<Hypothesis> generate_all_candidates(
+      const std::vector<ObservationData> &observations) const;
 };
 
 }  // namespace fyt::auto_aim::norm4_v3

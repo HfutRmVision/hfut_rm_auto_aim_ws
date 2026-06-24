@@ -188,7 +188,7 @@ class TrackerManager {
       }
     } else {
       if (config_.tracker.implementation == "norm4") {
-        t = std::make_unique<Norm4ArmorTracker>(config_, dt_, enable_osc_);
+        t = std::make_unique<Norm4ArmorTrackerV2>(config_, dt_, enable_osc_);
       } else if (config_.tracker.implementation == "norm4_v2") {
         t = std::make_unique<Norm4ArmorTrackerV2>(config_, dt_, enable_osc_);
       } else {
