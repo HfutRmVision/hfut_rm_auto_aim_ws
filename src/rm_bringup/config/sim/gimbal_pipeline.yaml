@@ -612,7 +612,7 @@ gimbal_pipeline:
         shooting_range_height: 0.155
         side_angle: 25.0 # 侧身判定角(度)，过大可能放入不可打面
         min_switching_v_yaw: 0.0
-        prediction_delay: 0.018   # 额外预测前瞻(s)，统一参数读取优先级高于 controller.mpc.prediction_delay_s
+        prediction_delay: 0.014   # 额外预测前瞻(s)，当前目标下 24ms 容易使云台加速饱和后冲过头
         max_prediction_time: 0.500 # 预测时域上限(s)
         max_tracking_v_yaw: 12.0
         transfer_thresh: 5
@@ -652,9 +652,9 @@ gimbal_pipeline:
           # 低速普通目标: 只在 shootable_angle_deg 内选板，双候选时锁定，避免 45deg 来回跳。
           # 高速/前哨站: 按 coming/leaving 角和 yaw_velocity 方向选将要转入视野的板。
           low_speed_vyaw: 6.5
-          shootable_angle_deg: 55.0
-          coming_angle_deg: 75.0
-          leaving_angle_deg: 35.0
+          shootable_angle_deg: 60.0
+          coming_angle_deg: 60.0
+          leaving_angle_deg: 20.0
           outpost_coming_angle_deg: 70.0
           outpost_leaving_angle_deg: 30.0
           hold_current_until_jump: false
@@ -674,7 +674,7 @@ gimbal_pipeline:
       # 统一延时参数（推荐新链路）
       # 优先使用该组；旧的 solver/state_machine/mpc 同名延时仅做兼容
       delay:
-        prediction_extra_s: 0.018    # 预测补偿额外项(s)
+        prediction_extra_s: 0.014    # 预测补偿额外项(s)，统一控制/开火链路前瞻
         control_latency_s: 0.000     # 控制链路延时(s)
         trigger_to_muzzle_s: 0.000     # 触发到出膛延时(s)
         max_processing_delay_s: 0.5  # 处理延时上限保护(s)
@@ -823,7 +823,7 @@ gimbal_pipeline:
         s_yaw: 0.050
         s_pitch: 0.100
         enable_delay_compensation: true
-        prediction_delay_s: 0.018
+        prediction_delay_s: 0.014
         flight_time_iters: 2
         max_processing_delay_s: 0.5
         yaw_feedforward_k_s: 0.0
@@ -919,13 +919,14 @@ gimbal_pipeline:
         max_yaw_diff: 15.0
         max_pitch_diff: 8.0
         enable_outlier_rejection: true
-        outlier_threshold_yaw: 4.0
-        outlier_threshold_pitch: 3.5
-        max_outlier_count: 3
+        outlier_threshold_yaw: 3.0
+        outlier_threshold_pitch: 2.5
+        max_outlier_count: 2
         enable_rate_limiter: true
-        max_yaw_rate: 2.0
-        max_pitch_rate: 1.0
-        enable_moving_average: true
+        # 单位是 deg/control_tick；250Hz 下 4.58 deg/tick ~= 20 rad/s 物理极速
+        max_yaw_rate: 3.0
+        max_pitch_rate: 1.2
+        enable_moving_average: false
         moving_average_window_size: 5
         enable_ema: false
         ema_alpha: 0.7
@@ -942,7 +943,7 @@ gimbal_pipeline:
     # 注意：避免与 controller.* 同时调同语义参数，否则调参难以追因。
     # =========================
     solver:
-      prediction_delay: 0.018
+      prediction_delay: 0.014
       max_prediction_time: 0.5
       controller_delay: 0.000
       trigger_to_muzzle_s: 0.000
@@ -954,7 +955,7 @@ gimbal_pipeline:
     mpc:
       control_delay_s: 0.000
       enable_delay_compensation: false
-      prediction_delay_s: 0.018
+      prediction_delay_s: 0.014
       flight_time_iters: 2
       max_processing_delay_s: 0.5
 

@@ -94,7 +94,11 @@ GimbalControlCoreOutput GimbalControlCore::compute(
   cmd = orchestrator_.finalize(context, cmd);
   output.fire_advice_debug = orchestrator_.lastFireAdviceDebug();
 
-  const std::string current_target = context.is_tracking ? selected_target_id : std::string();
+  // Like the reference tracker pipeline, TEMP_LOST is still a predictive
+  // continuation of the same target. Keep output-filter history across this
+  // state; reset only after the target is truly unavailable or changed.
+  const bool target_continues = context.is_tracking || context.is_temp_lost;
+  const std::string current_target = target_continues ? selected_target_id : std::string();
   if (current_target != prev_tracking_target_id_) {
     filter_.reset();
   }
